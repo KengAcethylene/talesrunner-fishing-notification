@@ -409,6 +409,7 @@ def main(debug=False):
 
         if current is None:
             no_read_seconds += CAPTURE_INTERVAL
+            log(f"No numbers detected. ({no_read_seconds}/{NO_READ_TIMEOUT}s)", "WARNING")
             if no_read_seconds >= NO_READ_TIMEOUT:
                 msg = f"No quota numbers detected for {NO_READ_TIMEOUT}s — shutting down."
                 log(msg, "ERROR")
