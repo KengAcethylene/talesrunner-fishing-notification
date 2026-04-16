@@ -54,6 +54,8 @@ session_start_time  = datetime.now()
 # LOGGING & UTILS
 # ============================================================
 LOG_FILE           = None   # file handle, set by --log-file
+DEBUG_MODE         = False
+DISCORD_DEBUG_MODE = False
 
 def log(message, level="INFO"):
     if level == "DEBUG" and not DEBUG_MODE:
