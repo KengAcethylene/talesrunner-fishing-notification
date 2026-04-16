@@ -11,6 +11,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Detect whether a display is available (headless Pi has none)
+def _has_display():
+    import platform
+    if platform.system() == "Windows":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+HAS_DISPLAY = _has_display()
+
 # ============================================================
 # SETTINGS
 # ============================================================
@@ -386,7 +395,10 @@ def main(debug=False):
         current = result["quota_current"]
 
         if debug:
-            if not show_debug(frame, result):
+            if not HAS_DISPLAY:
+                log("No display available — --debug ignored (headless mode).", "WARNING")
+                debug = False
+            elif not show_debug(frame, result):
                 log("Debug window closed.", "EXIT")
                 reader.release()
                 break

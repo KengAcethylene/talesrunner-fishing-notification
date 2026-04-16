@@ -24,13 +24,28 @@ talesrunner-fish-monitor/
 
 ## Requirements
 
+### Windows (gaming PC)
 ```
-pip install opencv-python ndi-python numpy requests
+pip install opencv-python ndi-python numpy requests python-dotenv
 ```
-
 - **NDI Runtime** — download and install from [ndi.video](https://ndi.video/download-ndi-sdk/)
 - **Python 3.10**
-- GPU optional (not required)
+
+### Raspberry Pi 4 (recommended — run monitor here, game on PC)
+```bash
+# System dependencies
+sudo apt update
+sudo apt install -y python3-pip python3-opencv libopenjp2-7
+
+# NDI SDK for ARM — download from ndi.video/download-ndi-sdk/
+# then install the .deb or extract and copy libs to /usr/local/lib
+
+# Python packages (headless OpenCV — no display required)
+pip3 install opencv-python-headless ndi-python numpy requests python-dotenv
+```
+
+> **Note:** `--debug` mode is automatically disabled on headless Pi (no display).
+> Copy the `templates/` folder from your Windows machine to the Pi before running.
 
 ---
 
