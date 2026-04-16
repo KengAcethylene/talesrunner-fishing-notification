@@ -33,6 +33,7 @@ QUOTA_ALERT_BUFFER = 50
 REPORT_INTERVAL    = 5
 CAPTURE_INTERVAL   = 1
 RECONNECT_DELAY    = 5
+NO_READ_TIMEOUT    = 60   # exit after this many consecutive seconds with no valid read
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 DISCORD_MENTION     = os.getenv("DISCORD_MENTION", "")
@@ -43,7 +44,8 @@ TEMPLATE_SIZE = (80, 120)     # (w, h) — all crops normalised to this before m
 
 # Global session trackers
 last_reported_count = -1
-alert_sent          = False
+alert_sent          = False   # near-quota warning sent
+limit_sent          = False   # quota limit reached sent
 start_count         = -1
 session_start_time  = datetime.now()
 
@@ -370,12 +372,14 @@ def open_stream(source_name):
 # MAIN LOOP
 # ============================================================
 def main(debug=False):
-    global last_reported_count, alert_sent, start_count, session_start_time
+    global last_reported_count, alert_sent, limit_sent, start_count, session_start_time
 
     templates = load_templates()
     if not templates:
         log("No templates found. Run:  py index.py --calibrate <current_count>", "WARNING")
         log("Example:  py index.py --calibrate 483", "WARNING")
+
+    no_read_seconds = 0
 
     reader   = open_stream(NDI_SOURCE_NAME)
     stream_w = int(reader.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -404,8 +408,17 @@ def main(debug=False):
                 break
 
         if current is None:
+            no_read_seconds += CAPTURE_INTERVAL
+            if no_read_seconds >= NO_READ_TIMEOUT:
+                msg = f"No quota numbers detected for {NO_READ_TIMEOUT}s — shutting down."
+                log(msg, "ERROR")
+                send_discord(msg, mention=True)
+                reader.release()
+                break
             time.sleep(CAPTURE_INTERVAL)
             continue
+
+        no_read_seconds = 0   # reset on successful read
 
         # Detect quota reset — count dropped significantly from previous read
         if start_count != -1 and current < start_count:
@@ -413,6 +426,7 @@ def main(debug=False):
             start_count         = current
             last_reported_count = current
             alert_sent          = False
+            limit_sent          = False
             session_start_time  = datetime.now()
 
         if start_count == -1:
@@ -433,16 +447,17 @@ def main(debug=False):
             send_discord(msg, mention=True)
             alert_sent = True
 
-        if current >= QUOTA_LIMIT and not alert_sent:
+        if current >= QUOTA_LIMIT and not limit_sent:
             msg = f"LIMIT REACHED: {current}/{QUOTA_LIMIT}"
             log(msg, "CRITICAL")
             send_discord(msg, mention=True)
-            alert_sent = True
+            limit_sent = True
 
         time.sleep(CAPTURE_INTERVAL)
 
     reader.release()
-    cv2.destroyAllWindows()
+    if HAS_DISPLAY:
+        cv2.destroyAllWindows()
 
 # ============================================================
 # CAPTURE / CALIBRATE
@@ -501,6 +516,7 @@ if __name__ == "__main__":
             main(debug=args.debug)
     except KeyboardInterrupt:
         log("Process terminated by user.", "EXIT")
-        cv2.destroyAllWindows()
+        if HAS_DISPLAY:
+            cv2.destroyAllWindows()
     finally:
         ndi.destroy()
