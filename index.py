@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 import pytesseract
+import NDIlib as ndi
 import time
 import argparse
 import threading
-import os
 import requests
 from datetime import datetime
 
@@ -13,7 +13,7 @@ from datetime import datetime
 # ============================================================
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-RTSP_URL = "rtsp://192.168.1.100:8554/live"  # Update to your PC's IP
+NDI_SOURCE_NAME = ""  # Partial or full NDI source name, e.g. "OBS (Scene)" — leave empty to use first discovered source
 
 CANVAS_SIZE = (1280, 720)  # All ROIs are calibrated to this size
 
@@ -22,7 +22,7 @@ ROI_QUOTA = (200, 480, 223, 142)   # "231/550" area
 QUOTA_LIMIT        = 550
 QUOTA_ALERT_BUFFER = 20
 REPORT_INTERVAL    = 5    # Log every 5 fish
-CAPTURE_INTERVAL   = 3    # Check every 3 seconds
+CAPTURE_INTERVAL   = 1    # Check every 1 second (matches 1 FPS stream)
 RECONNECT_DELAY    = 5
 
 LINE_TOKEN = ""  # LINE Notify token (leave empty to disable)
@@ -54,30 +54,23 @@ def crop(frame, roi):
     x, y, w, h = roi
     return frame[y:y+h, x:x+w]
 
-def _sharpen(gray):
-    """Unsharp mask — restores edges blurred by H.264 compression."""
-    blur = cv2.GaussianBlur(gray, (0, 0), 3)
-    return cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
-
-
-def _preprocess_quota(scaled_bgr, thresh_val=180):
+def _preprocess_quota(scaled_bgr):
     """
     Returns a binary image (black text, white background) ready for Tesseract.
 
-    QUOTA: grayscale + unsharp mask + fixed threshold.
-           White text (~240 gray, or ~210 after H.264) on dark blue (~80).
-           Sharpening boosts compressed text back above threshold 180.
+    Uses Otsu's method to automatically find the optimal threshold between
+    the bright text and dark background — works regardless of the exact
+    brightness of any given frame (no per-number tuning needed).
     """
     gray = cv2.cvtColor(scaled_bgr, cv2.COLOR_BGR2GRAY)
-    gray = _sharpen(gray)
-    _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     return thresh
 
 
-def clean_and_read_quota(img_roi, thresh_val=180, psm=7):
+def clean_and_read_quota(img_roi, psm=7):
     """Crops, pre-processes, and OCR-reads quota ROI. Returns raw text string."""
     scaled = cv2.resize(img_roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    thresh = _preprocess_quota(scaled, thresh_val)
+    thresh = _preprocess_quota(scaled)
     thresh = cv2.copyMakeBorder(thresh, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
 
     whitelist = '0123456789/'
@@ -100,7 +93,7 @@ def run_inference(frame):
     """
     resized = cv2.resize(frame, CANVAS_SIZE)
 
-    raw_quota = clean_and_read_quota(crop(resized, ROI_QUOTA), thresh_val=180, psm=7)
+    raw_quota = clean_and_read_quota(crop(resized, ROI_QUOTA), psm=7)
 
     # Parse quota string → integer current count
     quota_current = None
@@ -144,9 +137,7 @@ def show_debug(frame, result):
 
     cropped = crop(resized, ROI_QUOTA)
     scaled  = cv2.resize(cropped, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    gray    = cv2.cvtColor(scaled, cv2.COLOR_BGR2GRAY)
-    gray    = _sharpen(gray)
-    _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+    thresh  = _preprocess_quota(scaled)
 
     thresh_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
     cv2.imshow(f"QUOTA  '{result['quota_raw']}'", np.hstack([scaled, thresh_bgr]))
@@ -161,34 +152,42 @@ def show_debug(frame, result):
 # ============================================================
 class FrameReader:
     """
-    Reads RTSP frames continuously in a daemon thread.
+    Receives NDI video frames continuously in a daemon thread.
     Calling read() always returns the most recent decoded frame with no buffer lag.
 
     Why this matters:
-      cap.read() on RTSP blocks until the *next* frame arrives from the network.
-      When the main loop sleeps for CAPTURE_INTERVAL seconds, the internal FFMPEG
-      buffer fills up with stale frames — the next cap.read() returns old data, not
-      the current game state, so OCR reads the wrong numbers.
-      A background thread that drains the stream non-stop ensures read() is instant
-      and always fresh.
+      NDI recv_capture_v2() blocks until the next frame arrives.
+      When the main loop sleeps for CAPTURE_INTERVAL seconds, stale frames
+      would accumulate if we read synchronously — the background thread drains
+      the stream non-stop so read() is instant and always fresh.
     """
 
-    def __init__(self, url):
-        # Force TCP transport — more reliable than UDP on local networks
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-        self._cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-        self._frame = None
-        self._ret   = False
-        self._lock  = threading.Lock()
-        self._stop  = False
+    def __init__(self, source):
+        recv_desc = ndi.RecvCreateV3()
+        recv_desc.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA  # gives BGRX for progressive
+        self._recv   = ndi.recv_create_v3(recv_desc)
+        ndi.recv_connect(self._recv, source)
+        self._frame  = None
+        self._ret    = False
+        self._width  = 0
+        self._height = 0
+        self._lock   = threading.Lock()
+        self._stop   = False
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
         while not self._stop:
-            ret, frame = self._cap.read()
-            with self._lock:
-                self._ret   = ret
-                self._frame = frame
+            frame_type, video, audio, metadata = ndi.recv_capture_v2(self._recv, 1000)
+            if frame_type == ndi.FRAME_TYPE_VIDEO:
+                # video.data is BGRX; drop the X channel to get BGR
+                frame = np.copy(video.data[:, :, :3])
+                h, w  = frame.shape[:2]
+                ndi.recv_free_video_v2(self._recv, video)
+                with self._lock:
+                    self._ret    = True
+                    self._frame  = frame
+                    self._width  = w
+                    self._height = h
 
     def read(self):
         with self._lock:
@@ -196,27 +195,55 @@ class FrameReader:
                 return False, None
             return self._ret, self._frame.copy()
 
-    @property
-    def is_opened(self):
-        return self._cap.isOpened()
-
     def get(self, prop):
-        return self._cap.get(prop)
+        with self._lock:
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                return self._width
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                return self._height
+        return 0
 
     def release(self):
         self._stop = True
-        self._cap.release()
+        ndi.recv_destroy(self._recv)
 
 
-def open_stream(url):
-    """Blocks until the stream opens successfully."""
+def open_stream(source_name):
+    """Blocks until an NDI source is found and delivering frames."""
     while True:
-        log(f"Connecting to {url}...")
-        reader = FrameReader(url)
-        time.sleep(2)                       # give the thread time to grab first frame
+        label = f"'{source_name}'" if source_name else "(first available)"
+        log(f"Looking for NDI source {label}...")
+
+        # Keep the finder alive until AFTER recv_connect — source objects are
+        # backed by the finder's internal memory and become invalid once it is
+        # destroyed.
+        find = ndi.find_create_v2()
+        deadline = time.time() + 10
+        source = None
+        while time.time() < deadline:
+            sources = ndi.find_get_current_sources(find)
+            for src in sources:
+                if not source_name or source_name.lower() in src.ndi_name.lower():
+                    source = src
+                    break
+            if source:
+                break
+            time.sleep(0.5)
+
+        if source is None:
+            ndi.find_destroy(find)
+            log(f"No NDI source found. Retrying in {RECONNECT_DELAY}s...", "RETRY")
+            time.sleep(RECONNECT_DELAY)
+            continue
+
+        log(f"Found: {source.ndi_name}. Connecting...")
+        reader = FrameReader(source)   # recv_connect called inside, finder still alive
+        ndi.find_destroy(find)         # safe to destroy only after connecting
+
+        time.sleep(2)                  # give the thread time to grab first frame
         ret, frame = reader.read()
         if ret and frame is not None:
-            log("SUCCESS: Stream connected!", "OK")
+            log("SUCCESS: NDI source connected!", "OK")
             return reader
         reader.release()
         log(f"FAILED: Reconnecting in {RECONNECT_DELAY}s...", "RETRY")
@@ -229,7 +256,7 @@ def open_stream(url):
 def main(debug=False):
     global last_reported_count, alert_sent, start_count
 
-    reader = open_stream(RTSP_URL)
+    reader = open_stream(NDI_SOURCE_NAME)
     stream_w = int(reader.get(cv2.CAP_PROP_FRAME_WIDTH))
     stream_h = int(reader.get(cv2.CAP_PROP_FRAME_HEIGHT))
     log(f"Stream resolution : {stream_w}x{stream_h}  →  canvas {CANVAS_SIZE[0]}x{CANVAS_SIZE[1]}")
@@ -241,7 +268,7 @@ def main(debug=False):
         if not ret or frame is None:
             log("Lost stream. Attempting recovery...", "WARNING")
             reader.release()
-            reader = open_stream(RTSP_URL)
+            reader = open_stream(NDI_SOURCE_NAME)
             continue
 
         result  = run_inference(frame)
@@ -291,12 +318,12 @@ def main(debug=False):
     reader.release()
     cv2.destroyAllWindows()
 
-def capture_frame(output_path="rtsp_capture.jpg"):
+def capture_frame(output_path="ndi_capture.jpg"):
     """
-    Connects to RTSP, grabs one frame, saves it, then exits.
+    Connects to NDI, grabs one frame, saves it, then exits.
     Use this to get a real stream frame for ROI recalibration in test_ocr.py.
     """
-    reader = open_stream(RTSP_URL)
+    reader = open_stream(NDI_SOURCE_NAME)
     time.sleep(1)                       # let the buffer fill with a few fresh frames
     ret, frame = reader.read()
     reader.release()
@@ -318,9 +345,10 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true",
                         help="Show live ROI boxes and threshold windows")
     parser.add_argument("--capture", action="store_true",
-                        help="Grab one frame from RTSP, save as rtsp_capture.jpg, then exit")
+                        help="Grab one frame from NDI, save as ndi_capture.jpg, then exit")
     args = parser.parse_args()
 
+    ndi.initialize()
     try:
         if args.capture:
             capture_frame()
@@ -329,3 +357,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log("Process terminated by user.", "EXIT")
         cv2.destroyAllWindows()
+    finally:
+        ndi.destroy()
