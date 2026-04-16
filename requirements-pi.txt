@@ -1,5 +1,5 @@
 # Raspberry Pi 4 (headless — no display required)
-ndi-python==5.1.1.1
+# ndi-python==5.1.1.1 -> we install from repository instead
 numpy==2.2.6
 opencv-python-headless==4.13.0.92
 requests==2.33.1
