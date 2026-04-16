@@ -91,15 +91,16 @@ def main(cfg: Config, debug: bool = False):
 
         session.no_read_seconds = 0
 
-        if session.start_count != -1 and current < session.start_count:
-            log(f"Quota reset detected ({session.last_reported_count} → {current}). Starting new session.")
+        # Session reset detection: count dropped to < 50% of last reading.
+        if session.prev_current > 0 and current < session.prev_current // 2:
+            log(f"Quota reset detected ({session.prev_current} → {current}). Starting new session.")
             session.start_count = current
             session.last_reported_count = current
             session.alert_sent = False
             session.limit_sent = False
+            session.no_read_seconds = 0
             session.session_start_time = datetime.now()
-
-        if session.start_count == -1:
+        elif session.start_count == -1:
             session.start_count = current
             log(f"Session started. Initial count: {session.start_count}")
 
@@ -124,6 +125,7 @@ def main(cfg: Config, debug: bool = False):
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
             session.limit_sent = True
 
+        session.prev_current = current
         time.sleep(cfg["capture_interval"])
 
     reader.release()

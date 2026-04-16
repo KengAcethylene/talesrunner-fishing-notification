@@ -129,6 +129,7 @@ class MonitorSession:
     start_count: int = -1
     session_start_time: datetime = field(default_factory=datetime.now)
     no_read_seconds: int = 0
+    prev_current: int = -1   # used to detect quota reset
 
 
 # ============================================================

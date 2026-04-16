@@ -257,16 +257,18 @@ class MonitorTab(ttk.Frame):
 
                 session.no_read_seconds = 0
 
-                # Session reset detection
-                if session.start_count != -1 and current < session.start_count:
-                    _log(f"Quota reset detected ({session.last_reported_count} → {current}). New session.")
+                # Session reset detection: count dropped to < 50% of last reading.
+                # Using prev_current (not start_count) so a reset back to the
+                # starting value (e.g. 0 → 0) is still caught.
+                if session.prev_current > 0 and current < session.prev_current // 2:
+                    _log(f"Quota reset detected ({session.prev_current} → {current}). New session.")
                     session.start_count = current
                     session.last_reported_count = current
                     session.alert_sent = False
                     session.limit_sent = False
+                    session.no_read_seconds = 0
                     session.session_start_time = datetime.now()
-
-                if session.start_count == -1:
+                elif session.start_count == -1:
                     session.start_count = current
                     _log(f"Session started. Initial count: {session.start_count}")
 
@@ -300,6 +302,7 @@ class MonitorTab(ttk.Frame):
                     send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
                     session.limit_sent = True
 
+                session.prev_current = current
                 time.sleep(cfg["capture_interval"])
 
         finally:
