@@ -2,8 +2,9 @@ import cv2
 import numpy as np
 import signal
 import sys
+import argparse
 
-from index import run_inference, clean_and_read, crop, CANVAS_SIZE, ROI_QUOTA, ROI_BAIT, ROI_TIME
+from index import run_inference, clean_and_read_quota, crop, CANVAS_SIZE, ROI_QUOTA
 
 # ============================================================
 # Ctrl+C — closes all OpenCV windows and exits cleanly
@@ -18,7 +19,12 @@ signal.signal(signal.SIGINT, on_exit)
 # ============================================================
 # Load image and run inference
 # ============================================================
-image_path = "pi_vision_test.jpg"
+parser = argparse.ArgumentParser(description="OCR test on a still image")
+parser.add_argument("image", nargs="?", default="pi_vision_test.jpg",
+                    help="Path to image file (default: pi_vision_test.jpg)")
+args = parser.parse_args()
+
+image_path = args.image
 frame_orig = cv2.imread(image_path)
 
 if frame_orig is None:
@@ -34,8 +40,16 @@ print("=" * 50)
 result = run_inference(frame_orig)  # resizing handled inside run_inference
 
 print(f"[QUOTA]  raw='{result['quota_raw']}'  parsed={result['quota_current']}")
-print(f"[BAIT]   raw='{result['bait']}'")
-print(f"[TIME]   raw='{result['game_time']}'")
+print("=" * 50)
+
+# ============================================================
+# Pixel diagnostics — tells us exactly which thresholds to use
+# ============================================================
+print("--- Pixel Diagnostics ---")
+frame_diag = cv2.resize(frame_orig, CANVAS_SIZE)
+c    = crop(frame_diag, ROI_QUOTA)
+gray = cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+print(f"  [QUOTA] gray  min={gray.min():3d}  max={gray.max():3d}  mean={gray.mean():.1f}")
 print("=" * 50)
 print("Press Q or ESC in any window to quit, or Ctrl+C in terminal.")
 
@@ -44,36 +58,26 @@ print("Press Q or ESC in any window to quit, or Ctrl+C in terminal.")
 # ============================================================
 frame = cv2.resize(frame_orig, CANVAS_SIZE)
 
-regions = [
-    ("QUOTA", ROI_QUOTA, False, result["quota_raw"]),
-    ("BAIT",  ROI_BAIT,  False, result["bait"]),
-    ("TIME",  ROI_TIME,  True,  result["game_time"]),
-]
-
-# Main window — bounding boxes + labels on the resized frame
+# Main window — bounding box + label on the resized frame
 debug  = frame.copy()
-colors = {"QUOTA": (0, 255, 0), "BAIT": (0, 165, 255), "TIME": (0, 255, 255)}
-
-for name, roi, _, text in regions:
-    x, y, w, h = roi
-    color = colors[name]
-    cv2.rectangle(debug, (x, y), (x + w, y + h), color, 2)
-    cv2.putText(debug, f"{name}: {text}", (x, y - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+x, y, w, h = ROI_QUOTA
+color = (0, 255, 0)
+cv2.rectangle(debug, (x, y), (x + w, y + h), color, 2)
+cv2.putText(debug, f"QUOTA: {result['quota_raw']}", (x, y - 8),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
 cv2.imshow("Debug - ROI Boxes", debug)
 
-# Per-region window: original crop (left) | threshold (right)
-for name, roi, is_time, text in regions:
-    cropped    = crop(frame, roi)
-    thresh_val = 150 if (is_time or name == "BAIT") else 180
-    gray       = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    scaled     = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    _, thresh  = cv2.threshold(scaled, thresh_val, 255, cv2.THRESH_BINARY_INV)
+# Quota window: original crop (left) | threshold (right)
+cropped = crop(frame, ROI_QUOTA)
+scaled  = cv2.resize(cropped, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+gray    = cv2.cvtColor(scaled, cv2.COLOR_BGR2GRAY)
+blur    = cv2.GaussianBlur(gray, (0, 0), 3)
+gray    = cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
+_, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
-    orig_bgr   = cv2.resize(cropped, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    thresh_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-    cv2.imshow(f"{name}  '{text}'", np.hstack([orig_bgr, thresh_bgr]))
+thresh_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+cv2.imshow(f"QUOTA  '{result['quota_raw']}'", np.hstack([scaled, thresh_bgr]))
 
 # ============================================================
 # Event loop
