@@ -20,12 +20,14 @@ CANVAS_SIZE = (1280, 720)
 ROI_QUOTA   = (200, 480, 223, 142)   # "XXX/550" area
 
 QUOTA_LIMIT        = 550
-QUOTA_ALERT_BUFFER = 20
+QUOTA_ALERT_BUFFER = 50
 REPORT_INTERVAL    = 5
 CAPTURE_INTERVAL   = 1
 RECONNECT_DELAY    = 5
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_MENTION     = os.getenv("DISCORD_MENTION", "")
+REMOTE_DESKTOP_URL  = os.getenv("REMOTE_DESKTOP_URL", "")
 
 TEMPLATES_DIR = "templates"   # one PNG per digit: 0.png … 9.png
 TEMPLATE_SIZE = (80, 120)     # (w, h) — all crops normalised to this before matching
@@ -39,21 +41,28 @@ session_start_time  = datetime.now()
 # ============================================================
 # LOGGING & UTILS
 # ============================================================
-DEBUG_MODE = False   # set to True by --debug flag
+DEBUG_MODE         = False
+DISCORD_DEBUG_MODE = False
 
 def log(message, level="INFO"):
     if level == "DEBUG" and not DEBUG_MODE:
         return
     ts = datetime.now().strftime('%H:%M:%S')
     print(f"[{ts}] [{level}] {message}")
+    if DISCORD_DEBUG_MODE:
+        send_discord(f"[{level}] {message}", mention=True)
 
-def send_discord(message):
+def send_discord(message, mention=False):
     if not DISCORD_WEBHOOK_URL:
         return
+    content = f"{DISCORD_MENTION} {message}" if (mention and DISCORD_MENTION) else message
+    if mention and REMOTE_DESKTOP_URL:
+        content += f"\n{REMOTE_DESKTOP_URL}"
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=5)
-    except Exception:
-        log("Failed to send Discord notification", "ERROR")
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=5)
+    except Exception as e:
+        # Use print directly to avoid re-entering log → send_discord recursion
+        print(f"[ERROR] Failed to send Discord notification: {e}")
 
 def crop(frame, roi):
     x, y, w, h = roi
@@ -352,7 +361,7 @@ def open_stream(source_name):
 # MAIN LOOP
 # ============================================================
 def main(debug=False):
-    global last_reported_count, alert_sent, start_count
+    global last_reported_count, alert_sent, start_count, session_start_time
 
     templates = load_templates()
     if not templates:
@@ -386,6 +395,14 @@ def main(debug=False):
             time.sleep(CAPTURE_INTERVAL)
             continue
 
+        # Detect quota reset — count dropped significantly from previous read
+        if start_count != -1 and current < start_count:
+            log(f"Quota reset detected ({last_reported_count} → {current}). Starting new session.")
+            start_count         = current
+            last_reported_count = current
+            alert_sent          = False
+            session_start_time  = datetime.now()
+
         if start_count == -1:
             start_count = current
             log(f"Session started. Initial count: {start_count}")
@@ -401,14 +418,14 @@ def main(debug=False):
         if current >= threshold and not alert_sent:
             msg = f"QUOTA ALMOST FULL: {current}/{QUOTA_LIMIT}"
             log(msg, "ALERT")
-            send_discord(msg)
+            send_discord(msg, mention=True)
             alert_sent = True
 
-        if current >= QUOTA_LIMIT:
-            msg = f"LIMIT REACHED: {current}/{QUOTA_LIMIT}. AFK STOPPED."
+        if current >= QUOTA_LIMIT and not alert_sent:
+            msg = f"LIMIT REACHED: {current}/{QUOTA_LIMIT}"
             log(msg, "CRITICAL")
-            send_discord(msg)
-            time.sleep(60)
+            send_discord(msg, mention=True)
+            alert_sent = True
 
         time.sleep(CAPTURE_INTERVAL)
 
@@ -452,9 +469,12 @@ if __name__ == "__main__":
     parser.add_argument("--calibrate", metavar="COUNT",
                         help="Capture frame and save digit templates for COUNT "
                              "(e.g. --calibrate 483)")
+    parser.add_argument("--discord-debug", action="store_true",
+                        help="Send every log message to Discord (tests webhook)")
     args = parser.parse_args()
 
-    DEBUG_MODE = args.debug
+    DEBUG_MODE         = args.debug
+    DISCORD_DEBUG_MODE = args.discord_debug
 
     ndi.initialize()
     try:
