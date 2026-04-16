@@ -36,9 +36,8 @@ CAPTURE_INTERVAL   = 1
 RECONNECT_DELAY    = 5
 NO_READ_TIMEOUT    = 60   # exit after this many consecutive seconds with no valid read
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
-DISCORD_MENTION     = os.getenv("DISCORD_MENTION", "")
-REMOTE_DESKTOP_URL  = os.getenv("REMOTE_DESKTOP_URL", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
 TEMPLATES_DIR = "templates"   # one PNG per digit: 0.png … 9.png
 TEMPLATE_SIZE = (80, 120)     # (w, h) — all crops normalised to this before matching
@@ -67,19 +66,17 @@ def log(message, level="INFO"):
         LOG_FILE.write(line + "\n")
         LOG_FILE.flush()
     if DISCORD_DEBUG_MODE:
-        send_discord(f"[{level}] {message}", mention=True)
+        send_telegram(f"[{level}] {message}", mention=True)
 
-def send_discord(message, mention=False):
-    if not DISCORD_WEBHOOK_URL:
+def send_telegram(message, mention=False):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    content = f"{DISCORD_MENTION} {message}" if (mention and DISCORD_MENTION) else message
-    if mention and REMOTE_DESKTOP_URL:
-        content += f"\n{REMOTE_DESKTOP_URL}"
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=5)
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=5)
     except Exception as e:
-        # Use print directly to avoid re-entering log → send_discord recursion
-        print(f"[ERROR] Failed to send Discord notification: {e}")
+        # Use print directly to avoid re-entering log → send_telegram recursion
+        print(f"[ERROR] Failed to send Telegram notification: {e}")
 
 def crop(frame, roi):
     x, y, w, h = roi
@@ -462,7 +459,7 @@ def main(debug=False):
             if no_read_seconds >= NO_READ_TIMEOUT:
                 msg = f"No quota numbers detected for {NO_READ_TIMEOUT}s — shutting down."
                 log(msg, "ERROR")
-                send_discord(msg, mention=True)
+                send_telegram(msg, mention=True)
                 reader.release()
                 break
             time.sleep(CAPTURE_INTERVAL)
@@ -495,13 +492,13 @@ def main(debug=False):
         if current >= threshold and not alert_sent:
             msg = f"QUOTA ALMOST FULL: {current}/{QUOTA_LIMIT}"
             log(msg, "ALERT")
-            send_discord(msg, mention=True)
+            send_telegram(msg, mention=True)
             alert_sent = True
 
         if current >= QUOTA_LIMIT and not limit_sent:
             msg = f"LIMIT REACHED: {current}/{QUOTA_LIMIT}"
             log(msg, "CRITICAL")
-            send_discord(msg, mention=True)
+            send_telegram(msg, mention=True)
             limit_sent = True
 
         time.sleep(CAPTURE_INTERVAL)
@@ -547,8 +544,8 @@ if __name__ == "__main__":
     parser.add_argument("--calibrate", metavar="COUNT",
                         help="Capture frame and save digit templates for COUNT "
                              "(e.g. --calibrate 483)")
-    parser.add_argument("--discord-debug", action="store_true",
-                        help="Send every log message to Discord (tests webhook)")
+    parser.add_argument("--telegram-debug", action="store_true",
+                        help="Send every log message to Telegram (tests bot)")
     parser.add_argument("--log-file", metavar="PATH",
                         help="Write all log output to a file (e.g. --log-file monitor.log)")
     parser.add_argument("--no-timeout", action="store_true",
@@ -558,7 +555,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DEBUG_MODE         = args.debug
-    DISCORD_DEBUG_MODE = args.discord_debug
+    DISCORD_DEBUG_MODE = args.telegram_debug
 
     if args.no_timeout:
         NO_READ_TIMEOUT = float('inf')
