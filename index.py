@@ -27,6 +27,7 @@ NDI_SOURCE_NAME = ""  # Partial/full NDI source name; empty = first found
 
 CANVAS_SIZE = (1280, 720)
 ROI_QUOTA   = (200, 480, 223, 142)   # "XXX/550" area
+ROI_TIME    = (280, 180, 253, 163)   # "H:MM:SS" area
 
 QUOTA_LIMIT        = 550
 QUOTA_ALERT_BUFFER = 50
@@ -52,14 +53,17 @@ session_start_time  = datetime.now()
 # ============================================================
 # LOGGING & UTILS
 # ============================================================
-DEBUG_MODE         = False
-DISCORD_DEBUG_MODE = False
+LOG_FILE           = None   # file handle, set by --log-file
 
 def log(message, level="INFO"):
     if level == "DEBUG" and not DEBUG_MODE:
         return
-    ts = datetime.now().strftime('%H:%M:%S')
-    print(f"[{ts}] [{level}] {message}")
+    ts   = datetime.now().strftime('%H:%M:%S')
+    line = f"[{ts}] [{level}] {message}"
+    print(line)
+    if LOG_FILE:
+        LOG_FILE.write(line + "\n")
+        LOG_FILE.flush()
     if DISCORD_DEBUG_MODE:
         send_discord(f"[{level}] {message}", mention=True)
 
@@ -190,6 +194,44 @@ def clean_and_read_quota(img_roi, templates):
 
     return ''.join(result)
 
+def clean_and_read_time(img_roi, templates):
+    """
+    Read the in-game timer (e.g. '0:27:22') using template matching.
+    Colons are detected by their small area relative to digit components —
+    no colon template needed.
+    Returns a time string or '' on failure.
+    """
+    thresh = preprocess_quota(img_roi)
+    h, w   = thresh.shape
+    inv    = cv2.bitwise_not(thresh)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
+
+    min_area = h * w * 0.003
+    comps = []
+    for i in range(1, n):
+        cx, cy, cw, ch, area = stats[i]
+        if area >= min_area:
+            comps.append((cx, area, thresh[cy:cy+ch, cx:cx+cw]))
+
+    if not comps:
+        return ''
+
+    comps.sort(key=lambda c: c[0])
+
+    # Colons are two small dots — much smaller area than any digit
+    max_area = max(c[1] for c in comps)
+
+    result = []
+    for cx, area, char_crop in comps:
+        if area < max_area * 0.25:
+            result.append(':')
+        else:
+            digit, score = match_digit(char_crop, templates)
+            log(f"  time x={cx}: '{digit}' score={score:.2f}", "DEBUG")
+            result.append(digit)
+
+    return ''.join(result)
+
 # ============================================================
 # CALIBRATION
 # ============================================================
@@ -255,6 +297,7 @@ def calibrate(frame, count_str, templates):
 def run_inference(frame, templates):
     resized   = cv2.resize(frame, CANVAS_SIZE)
     raw_quota = clean_and_read_quota(crop(resized, ROI_QUOTA), templates)
+    raw_time  = clean_and_read_time(crop(resized, ROI_TIME), templates)
 
     quota_current = None
     clean_q = "".join(c for c in raw_quota if c.isdigit() or c == "/")
@@ -266,7 +309,11 @@ def run_inference(frame, templates):
     except ValueError:
         pass
 
-    return {"quota_raw": raw_quota, "quota_current": quota_current}
+    return {
+        "quota_raw":     raw_quota,
+        "quota_current": quota_current,
+        "time_raw":      raw_time,
+    }
 
 # ============================================================
 # DEBUG DISPLAY
@@ -439,7 +486,8 @@ def main(debug=False):
 
         if current >= last_reported_count + REPORT_INTERVAL:
             uptime = str(datetime.now() - session_start_time).split('.')[0]
-            log(f"FISH: {current}/{QUOTA_LIMIT} (+{caught_now}) | UPTIME: {uptime}")
+            game_time = result.get("time_raw") or "--:--:--"
+            log(f"FISH: {current}/{QUOTA_LIMIT} (+{caught_now}) | GAME: {game_time} | UPTIME: {uptime}")
             last_reported_count = current
 
         if current >= threshold and not alert_sent:
@@ -499,22 +547,51 @@ if __name__ == "__main__":
                              "(e.g. --calibrate 483)")
     parser.add_argument("--discord-debug", action="store_true",
                         help="Send every log message to Discord (tests webhook)")
+    parser.add_argument("--log-file", metavar="PATH",
+                        help="Write all log output to a file (e.g. --log-file monitor.log)")
+    parser.add_argument("--no-timeout", action="store_true",
+                        help="Disable auto-shutdown when no numbers are detected")
+    parser.add_argument("--list-sources", action="store_true",
+                        help="Discover and list NDI sources on the network, then exit")
     args = parser.parse_args()
 
     DEBUG_MODE         = args.debug
     DISCORD_DEBUG_MODE = args.discord_debug
 
+    if args.no_timeout:
+        NO_READ_TIMEOUT = float('inf')
+
     ndi.initialize()
     try:
-        if args.capture:
-            capture_frame()
-        elif args.calibrate:
-            frame = capture_frame()
-            if frame is not None:
-                templates = load_templates()
-                calibrate(frame, args.calibrate, templates)
+        if args.list_sources:
+            print("Searching for NDI sources (10s)...")
+            find    = ndi.find_create_v2()
+            time.sleep(10)
+            sources = ndi.find_get_current_sources(find)
+            ndi.find_destroy(find)
+            if sources:
+                print(f"Found {len(sources)} source(s):")
+                for s in sources:
+                    print(f"  {s.ndi_name}")
+            else:
+                print("No NDI sources found.")
         else:
-            main(debug=args.debug)
+            if args.log_file:
+                LOG_FILE = open(args.log_file, "a", encoding="utf-8")
+                log(f"Logging to {args.log_file}")
+            try:
+                if args.capture:
+                    capture_frame()
+                elif args.calibrate:
+                    frame = capture_frame()
+                    if frame is not None:
+                        templates = load_templates()
+                        calibrate(frame, args.calibrate, templates)
+                else:
+                    main(debug=args.debug)
+            finally:
+                if args.log_file and LOG_FILE:
+                    LOG_FILE.close()
     except KeyboardInterrupt:
         log("Process terminated by user.", "EXIT")
         if HAS_DISPLAY:
