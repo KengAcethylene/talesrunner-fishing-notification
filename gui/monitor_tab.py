@@ -243,15 +243,7 @@ class MonitorTab(ttk.Frame):
 
                 if current is None:
                     session.no_read_seconds += cfg["capture_interval"]
-                    _log(f"No numbers detected. ({session.no_read_seconds}/{cfg['no_read_timeout']}s)",
-                         "WARNING")
-                    if (cfg["no_read_timeout"] != float('inf') and
-                            session.no_read_seconds >= cfg["no_read_timeout"]):
-                        msg = f"No quota numbers detected for {cfg['no_read_timeout']}s — stopping."
-                        _log(msg, "ERROR")
-                        send_telegram(cfg["telegram_bot_token"],
-                                      cfg["telegram_chat_id"], msg)
-                        break
+                    _log(f"No numbers detected. ({session.no_read_seconds}s)", "WARNING")
                     time.sleep(cfg["capture_interval"])
                     continue
 
