@@ -29,7 +29,6 @@ HAS_DISPLAY = _has_display()
 _CONFIG_DEFAULTS = {
     "virtual_camera_index": 0,      # cv2.VideoCapture index for OBS Virtual Camera
     "virtual_camera_name": "",      # friendly name displayed in UI
-    "canvas_size": [1280, 720],
     "roi_quota": [200, 480, 223, 142],
     "quota_limit": 550,
     "quota_alert_buffer": 50,
@@ -40,7 +39,6 @@ _CONFIG_DEFAULTS = {
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "templates_dir": "templates",
-    "obs_export_resolution": "1280x720",
 }
 
 
@@ -94,8 +92,7 @@ class Config:
     # Convenience properties
     @property
     def canvas_size(self):
-        v = self._data["canvas_size"]
-        return (int(v[0]), int(v[1]))
+        return (1280, 720)
 
     @property
     def roi_quota(self):

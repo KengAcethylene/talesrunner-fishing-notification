@@ -6,8 +6,14 @@ import os
 from core import Config, load_templates
 from gui.settings_tab import SettingsTab
 from gui.roi_tab import ROITab
-from gui.calibration_tab import CalibrationTab
+from gui.calibration_tab import CalibrationTab, THRESH_PREVIEW_W, THRESH_PREVIEW_H
 from gui.monitor_tab import MonitorTab
+
+# Initial window size derived from the calibration tab's dominant elements:
+#   width  = thresh canvas (THRESH_PREVIEW_W) + left label column + paddings + chrome
+#   height = all stacked sections + tab bar + chrome
+_WIN_W = THRESH_PREVIEW_W + 300   # 600 + 300 = 900
+_WIN_H = THRESH_PREVIEW_H * 4 + 110  # 160*4 + 110 = 750
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -19,8 +25,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("TalesRunner Fish Monitor")
-        self.geometry("1100x750")
-        self.minsize(900, 650)
+        self.geometry(f"{_WIN_W}x{_WIN_H}")
 
         # Shared state
         self.cfg = Config()

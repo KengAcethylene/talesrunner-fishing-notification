@@ -1,8 +1,7 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 import customtkinter as ctk
 import threading
-import os
 
 from gui import labeled_frame
 
@@ -17,8 +16,6 @@ class SettingsTab(ctk.CTkFrame):
         self._cam_choices     = []               # [(index, name), ...]
         self.token_var        = tk.StringVar()
         self.chat_id_var      = tk.StringVar()
-        self.canvas_size_var  = tk.StringVar()
-        self.obs_res_var      = tk.StringVar()
         self.quota_limit_var  = tk.StringVar()
         self.alert_buffer_var = tk.StringVar()
 
@@ -73,8 +70,16 @@ class SettingsTab(ctk.CTkFrame):
 
         tg_frame.grid_columnconfigure(1, weight=1)
 
-        # Keep a reference to the telegram frame so we can pack after it
-        self._tg_outer = tg_outer
+        # ---- OBS Setup Notice ----
+        obs_notice = ctk.CTkFrame(self, fg_color=("#fff3cd", "#3a3000"), corner_radius=6)
+        obs_notice.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(
+            obs_notice,
+            text="OBS Setup Required: set Canvas Resolution and Output Resolution to 1280×720 in OBS → Settings → Video.",
+            text_color=("#7a5800", "#ffd966"),
+            wraplength=800,
+            justify="left",
+        ).pack(anchor="w", padx=10, pady=6)
 
         # ---- Quota Settings ----
         quota_outer, quota_frame = labeled_frame(self, "Quota Settings")
@@ -90,35 +95,6 @@ class SettingsTab(ctk.CTkFrame):
         ctk.CTkLabel(quota_frame,
                      text="(send alert when quota ≥ limit − buffer)",
                      text_color="gray").grid(row=0, column=4, sticky="w", **pad)
-
-        # ---- Canvas Resolution ----
-        canvas_outer, canvas_frame = labeled_frame(self, "Processing Canvas Resolution")
-        canvas_outer.pack(fill="x", padx=12, pady=4)
-
-        ctk.CTkLabel(canvas_frame, text="Canvas Size:").grid(row=0, column=0, sticky="w", **pad)
-        ctk.CTkComboBox(canvas_frame, variable=self.canvas_size_var,
-                        values=["1280x720", "640x360"],
-                        state="readonly", width=140).grid(row=0, column=1, sticky="w", **pad)
-        ctk.CTkLabel(canvas_frame,
-                     text="(resize input frame to this before ROI lookup)",
-                     text_color="gray").grid(row=0, column=2, sticky="w", **pad)
-
-        # ---- OBS Export ----
-        obs_outer, obs_frame = labeled_frame(self, "OBS Profile Export")
-        obs_outer.pack(fill="x", padx=12, pady=4)
-
-        ctk.CTkLabel(obs_frame, text="OBS Output Resolution:").grid(
-            row=0, column=0, sticky="w", **pad)
-        ctk.CTkComboBox(obs_frame, variable=self.obs_res_var,
-                        values=["1280x720", "640x360"],
-                        state="readonly", width=140).grid(row=0, column=1, sticky="w", **pad)
-        ctk.CTkLabel(obs_frame,
-                     text="@ 1 FPS  (low FPS is fine for fish monitoring)",
-                     text_color="gray").grid(row=0, column=2, sticky="w", **pad)
-        ctk.CTkButton(obs_frame, text="Export OBS Profile…", width=160,
-                      command=self._on_export_obs).grid(row=0, column=3, **pad)
-
-        obs_frame.grid_columnconfigure(2, weight=1)
 
         # ---- Save Button ----
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -140,9 +116,6 @@ class SettingsTab(ctk.CTkFrame):
         self.chat_id_var.set(self.cfg["telegram_chat_id"])
         self.quota_limit_var.set(str(self.cfg["quota_limit"]))
         self.alert_buffer_var.set(str(self.cfg["quota_alert_buffer"]))
-        w, h = self.cfg.canvas_size
-        self.canvas_size_var.set(f"{w}x{h}")
-        self.obs_res_var.set(self.cfg["obs_export_resolution"])
 
     # ------------------------------------------------------------------
     def _on_scan_cameras(self):
@@ -197,7 +170,6 @@ class SettingsTab(ctk.CTkFrame):
     def _on_save(self):
         self.cfg.set("telegram_bot_token", self.token_var.get().strip())
         self.cfg.set("telegram_chat_id",   self.chat_id_var.get().strip())
-        self.cfg.set("obs_export_resolution", self.obs_res_var.get())
 
         # Parse camera index and name from display string "Name  (index N)"
         import re
@@ -224,58 +196,9 @@ class SettingsTab(ctk.CTkFrame):
             messagebox.showerror("Error", "Quota Limit and Alert Buffer must be integers.")
             return
 
-        cs = self.canvas_size_var.get()
-        try:
-            w, h = (int(v) for v in cs.split("x"))
-            self.cfg.set("canvas_size", [w, h])
-        except ValueError:
-            messagebox.showerror("Error", f"Invalid canvas size: {cs}")
-            return
-
         self.cfg.save()
-        # Refresh source label on tabs that display it
         for tab in (self.app.roi_tab, self.app.calibration_tab):
             tab.refresh_source_label()
         self._save_status.configure(text="Saved!", text_color="green")
         self.after(2000, lambda: self._save_status.configure(text=""))
 
-    # ------------------------------------------------------------------
-    def _on_export_obs(self):
-        res = self.obs_res_var.get()
-        try:
-            w, h = (int(v) for v in res.split("x"))
-        except ValueError:
-            messagebox.showerror("Error", f"Invalid resolution: {res}")
-            return
-
-        path = filedialog.asksaveasfilename(
-            defaultextension=".ini",
-            filetypes=[("OBS Profile INI", "*.ini"), ("All files", "*.*")],
-            initialfile="basic.ini",
-            title="Save OBS Profile",
-        )
-        if not path:
-            return
-
-        content = (
-            "[General]\n"
-            "Name=TalesRunner\n"
-            "\n"
-            "[Video]\n"
-            f"BaseCX={w}\n"
-            f"BaseCY={h}\n"
-            f"OutputCX={w}\n"
-            f"OutputCY={h}\n"
-            "FPSType=1\n"
-            "FPSInt=1\n"
-        )
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-            messagebox.showinfo(
-                "Exported",
-                f"OBS profile saved to:\n{path}\n\n"
-                "In OBS: Profile → Import → select this file.",
-            )
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save: {e}")
