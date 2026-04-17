@@ -101,21 +101,22 @@ def main(cfg: Config, debug: bool = False):
             log(f"Session started. Initial count: {session.start_count}")
 
         caught_now = current - session.start_count
-        threshold  = cfg["quota_limit"] - cfg["quota_alert_buffer"]
+        limit      = result["quota_limit"] or cfg["quota_limit"]
+        threshold  = limit - cfg["quota_alert_buffer"]
 
         if current >= session.last_reported_count + cfg["report_interval"]:
             uptime = str(datetime.now() - session.session_start_time).split('.')[0]
-            log(f"FISH: {current}/{cfg['quota_limit']} (+{caught_now}) | UPTIME: {uptime}")
+            log(f"FISH: {current}/{limit} (+{caught_now}) | UPTIME: {uptime}")
             session.last_reported_count = current
 
         if current >= threshold and not session.alert_sent:
-            msg = f"QUOTA ALMOST FULL: {current}/{cfg['quota_limit']}"
+            msg = f"QUOTA ALMOST FULL: {current}/{limit}"
             log(msg, "ALERT")
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
             session.alert_sent = True
 
-        if current >= cfg["quota_limit"] and not session.limit_sent:
-            msg = f"LIMIT REACHED: {current}/{cfg['quota_limit']}"
+        if current >= limit and not session.limit_sent:
+            msg = f"LIMIT REACHED: {current}/{limit}"
             log(msg, "CRITICAL")
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
             session.limit_sent = True

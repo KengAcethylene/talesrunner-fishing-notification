@@ -1,161 +1,154 @@
 # TalesRunner Fish Monitor
 
-Monitors the fish quota counter in TalesRunner via an NDI video source.
-It reads the `XXX/550` display on screen every second using image processing
-and template matching, then logs progress and sends alerts when the quota
-is nearly full.
+A passive monitoring tool that watches the fish quota counter in TalesRunner and
+sends a Telegram alert when the limit is almost reached.
+
+> **This is not a cheat or bot program.**
+> It only reads numbers from the screen and sends a notification.
+> The game is never automated — a human must manually stop fishing when the quota is reached.
 
 ---
 
-## Project Structure
+## How It Works (overview)
 
 ```
-talesrunner-fish-monitor/
-├── index.py            # Main script
-├── templates/          # Digit templates (created by --calibrate)
-│   ├── 0.png
-│   ├── 1.png
-│   └── ...
-├── ndi_capture.jpg     # Last captured full frame (from --capture)
-└── ndi_roi_thresh.jpg  # Last captured ROI threshold image (from --capture)
+TalesRunner (game)
+      │  display
+      ▼
+OBS Studio  ──  Window Capture → crop to quota panel → Virtual Camera
+      │
+      ▼
+TalesRunner Fish Monitor  (this app)
+      │  reads frames from OBS Virtual Camera
+      │  OCR on the XXX/550 counter
+      ▼
+Telegram alert  ──  "Quota almost full: 500/550"
 ```
 
 ---
 
 ## Requirements
 
-### Windows (gaming PC)
-```
-pip install opencv-python ndi-python numpy requests python-dotenv
-```
-- **NDI Runtime** — download and install from [ndi.video](https://ndi.video/download-ndi-sdk/)
-- **Python 3.10**
-
-### Raspberry Pi 4 (recommended — run monitor here, game on PC)
-```bash
-# System dependencies
-sudo apt update
-sudo apt install -y python3-pip python3-opencv libopenjp2-7
-
-# NDI SDK for ARM — download from ndi.video/download-ndi-sdk/
-# then install the .deb or extract and copy libs to /usr/local/lib
-
-# Python packages (headless OpenCV — no display required)
-pip3 install opencv-python-headless ndi-python numpy requests python-dotenv
-```
-
-> **Note:** `--debug` mode is automatically disabled on headless Pi (no display).
-> Copy the `templates/` folder from your Windows machine to the Pi before running.
+- **Python 3.10 or newer** — [python.org](https://www.python.org/downloads/)
+- **OBS Studio** — [obsproject.com](https://obsproject.com/)
+- **Windows 10/11**
 
 ---
 
-## Settings (top of `index.py`)
+## Installation
 
-| Variable | Default | Description |
-|---|---|---|
-| `NDI_SOURCE_NAME` | `""` | NDI source name to connect to. Empty = first source found. |
-| `CANVAS_SIZE` | `(1280, 720)` | All ROI coordinates are calibrated to this resolution. |
-| `ROI_QUOTA` | `(200, 480, 223, 142)` | `(x, y, width, height)` of the quota counter on screen. |
-| `QUOTA_LIMIT` | `550` | Maximum fish quota. |
-| `QUOTA_ALERT_BUFFER` | `20` | Alert fires when count reaches `QUOTA_LIMIT - QUOTA_ALERT_BUFFER`. |
-| `REPORT_INTERVAL` | `5` | Log a status line every N fish caught. |
-| `CAPTURE_INTERVAL` | `1` | Seconds between each OCR check. |
-| `LINE_TOKEN` | `""` | LINE Notify token. Leave empty to disable notifications. |
+**1. Clone or download this repository**
+```
+git clone https://github.com/yourname/talesrunner-fish-monitor.git
+cd talesrunner-fish-monitor
+```
+
+**2. Create a virtual environment and install dependencies**
+```
+python -m venv venv
+venv\Scripts\pip install -e ".[windows]"
+```
 
 ---
 
-## How It Works
+## First-time Setup
 
-```
-NDI Source
-   │
-   ▼
-FrameReader (background thread)
-   │  Continuously receives NDI video frames so read() is always fresh.
-   ▼
-run_inference()
-   │
-   ├─ Resize frame to CANVAS_SIZE
-   ├─ Crop ROI_QUOTA region
-   ├─ preprocess_quota()
-   │     3× upscale + Otsu threshold → binary image (black text / white background)
-   ├─ extract_char_crops()
-   │     Connected components → individual character bounding boxes
-   │     '/' identified as the narrowest component in the central image band
-   ├─ match_digit()  ×N
-   │     Resize crop to TEMPLATE_SIZE, compare against all saved templates
-   │     using normalised cross-correlation (TM_CCOEFF_NORMED).
-   │     Returns '?' if best score < MATCH_MIN_SCORE (0.55).
-   └─ Parse "XXX/550" → integer quota count
-```
+### Step 1 — OBS Settings
 
-The main loop then:
-- Logs every `REPORT_INTERVAL` fish caught
-- Sends an alert when count reaches `QUOTA_LIMIT - QUOTA_ALERT_BUFFER`
-- Logs CRITICAL and pauses 60 s when `QUOTA_LIMIT` is reached
+1. Set TalesRunner's in-game resolution to **1280×960**
+   (in-game Settings → Display)
+2. Open OBS → **Settings → Video**
+   - Canvas Resolution: `1280×720`
+   - Output Resolution: `1280×720`
+3. Add a source: **Sources → + → Window Capture** (or Game Capture) → select TalesRunner
+4. **Crop** the source to the quota panel area (the **red square** shown in `ingame-crop-example.jpg`):
+   - Hold **Alt** and drag any edge to crop
+   - Hold **Shift** while resizing to stretch it to fill the full canvas
+5. Once the crop looks correct, open OBS → **Settings → Output** → set Frame Rate to `1 FPS`
+   (fish monitoring doesn't need more than 1 FPS)
+6. Click **Start Virtual Camera** in OBS
 
----
+### Step 2 — Settings tab
 
-## Usage
+1. Run the app (see below), open the **Settings** tab
+2. Click **Scan Cameras** → select the OBS Virtual Camera → **Save Settings**
+3. Enter your Telegram Bot Token and Chat ID (see Setup tab in the app for instructions)
 
-### 1. First-time calibration (required before monitoring)
+### Step 3 — Calibration
 
-Digit recognition uses template matching against saved PNGs in `templates/`.
-These must be collected once before the monitor will work.
+Digit recognition uses template matching. All 10 digits (0–9) must be captured once.
 
-**Step 1** — check what is currently on screen, then run:
-```
-py -3.10 index.py --calibrate <count>
-```
-Example: if the screen shows `312/550`, run:
-```
-py -3.10 index.py --calibrate 312
-```
+1. Start fishing in TalesRunner so the quota counter is visible
+2. Open the **Calibration** tab → **Capture Frame**
+3. Assign the correct digit label to each detected crop
+4. Click **Save Selected Templates**
+5. Repeat until all 10 digits show ✓
 
-The script saves templates for each digit it can identify. The denominator
-`550` is always labelled automatically, so `5` and `0` are saved on every run.
+### Step 4 — Monitor
 
-**Step 2** — repeat with different counts until all 10 digits are collected.
-The script prints which digits are still missing after each run.
-
-```
-py -3.10 index.py --calibrate 467   # adds 4, 6, 7
-py -3.10 index.py --calibrate 189   # adds 1, 8, 9
-py -3.10 index.py --calibrate 23    # adds 2, 3
-```
-
-### 2. Start monitoring
-```
-py -3.10 index.py
-```
-
-### 3. Debug mode (shows live ROI overlay and threshold window)
-```
-py -3.10 index.py --debug
-```
-
-### 4. Capture a single frame for ROI recalibration
-```
-py -3.10 index.py --capture
-```
-Saves `ndi_capture.jpg` (full frame) and `ndi_roi_thresh.jpg` (quota ROI
-after thresholding) for inspecting whether `ROI_QUOTA` is correctly positioned.
+Open the **Monitor** tab → **Start Monitoring**
 
 ---
 
-## ROI Recalibration
+## Running the App
 
-If the game resolution or UI layout changes, `ROI_QUOTA` must be updated.
+### GUI (recommended)
+```
+venv\Scripts\python app.py
+```
 
-1. Run `--capture` to save `ndi_capture.jpg`.
-2. Open the image and find the pixel coordinates of the quota counter.
-3. Update `ROI_QUOTA = (x, y, width, height)` in `index.py`.
-4. Re-run `--calibrate` to rebuild templates at the new position.
+### CLI (headless / background use)
+```
+venv\Scripts\python index.py
+```
+
+CLI options:
+```
+--debug           Show live ROI overlay window (requires display)
+--list-cameras    List available camera devices and exit
+--log-file PATH   Write all log output to a file
+--no-timeout      Disable auto-shutdown when no numbers are detected
+```
 
 ---
 
-## LINE Notifications
+## Project Files
 
-Set `LINE_TOKEN` in `index.py` to your LINE Notify token, then uncomment
-the two `send_line()` calls in `main()` to enable push notifications for
-the near-quota alert and the limit-reached event.
+```
+talesrunner-fish-monitor/
+├── app.py                  # GUI entry point (customtkinter)
+├── index.py                # CLI entry point
+├── core.py                 # All shared logic (OCR, config, camera)
+├── gui/
+│   ├── setup_tab.py        # Setup instructions tab
+│   ├── settings_tab.py     # Camera, Telegram, quota settings
+│   ├── roi_tab.py          # Draw the quota ROI region
+│   ├── calibration_tab.py  # Capture and label digit templates
+│   └── monitor_tab.py      # Live monitoring view
+├── templates/              # Digit template images (created by Calibration tab)
+│   ├── 0.png … 9.png
+├── ingame-crop-example.jpg # Reference image shown in Setup tab
+└── pyproject.toml          # Package / dependency config
+```
+
+---
+
+## Telegram Notifications
+
+| Event | Message |
+|---|---|
+| Quota near limit | `QUOTA ALMOST FULL: 500/550` |
+| Quota limit reached | `LIMIT REACHED: 550/550` |
+| No numbers detected for 60 s | `No quota numbers detected — shutting down` |
+
+See the **Setup tab** in the app for step-by-step bot creation instructions.
+
+---
+
+## Disclaimer
+
+This tool does **not** interact with the game process, inject code, read game memory,
+or automate any in-game action. It captures a screen region via OBS Virtual Camera
+and reads numbers using image processing — the same as a human watching a second monitor.
+When the quota limit is reached, a Telegram notification is sent and the **human player
+decides what to do next**. No game rules are broken.

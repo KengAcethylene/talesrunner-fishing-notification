@@ -45,9 +45,12 @@ class SetupTab(ctk.CTkFrame):
                 "2. In OBS → Settings → Video\n"
                 "       • Set Canvas Resolution to 1280×720\n"
                 "       • Set Output Resolution to 1280×720\n\n"
-                "3. In OBS → Settings → Output → set Frame Rate to 1 FPS\n"
+                "3. Add a Window Capture (or Game Capture) source for TalesRunner,\n"
+                "       then crop & resize it to fill the canvas  (see Step 2 below)\n\n"
+                "4. After the crop looks correct:\n"
+                "       OBS → Settings → Output → set Frame Rate to 1 FPS\n"
                 "       (fish monitoring doesn't need more than 1 FPS)\n\n"
-                "4. Start Virtual Camera:  OBS → Start Virtual Camera"
+                "5. Start Virtual Camera:  OBS → Start Virtual Camera"
             ),
             text_color="gray",
             justify="left",

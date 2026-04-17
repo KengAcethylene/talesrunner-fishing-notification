@@ -249,7 +249,7 @@ class MonitorTab(ctk.CTkFrame):
                     _log(f"Session started. Initial count: {session.start_count}")
 
                 caught_now = current - session.start_count
-                limit      = cfg["quota_limit"]
+                limit      = result["quota_limit"] or cfg["quota_limit"]
                 threshold  = limit - cfg["quota_alert_buffer"]
 
                 self._post("quota", (current, limit))

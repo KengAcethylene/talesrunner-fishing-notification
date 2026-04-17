@@ -74,7 +74,7 @@ class SettingsTab(ctk.CTkFrame):
         quota_outer, quota_frame = labeled_frame(self, "Quota Settings")
         quota_outer.pack(fill="x", padx=12, pady=4)
 
-        ctk.CTkLabel(quota_frame, text="Quota Limit:").grid(row=0, column=0, sticky="w", **pad)
+        ctk.CTkLabel(quota_frame, text="Fallback Limit:").grid(row=0, column=0, sticky="w", **pad)
         ctk.CTkEntry(quota_frame, textvariable=self.quota_limit_var, width=80).grid(
             row=0, column=1, sticky="w", **pad)
 
@@ -82,7 +82,7 @@ class SettingsTab(ctk.CTkFrame):
         ctk.CTkEntry(quota_frame, textvariable=self.alert_buffer_var, width=80).grid(
             row=0, column=3, sticky="w", **pad)
         ctk.CTkLabel(quota_frame,
-                     text="(send alert when quota ≥ limit − buffer)",
+                     text="(limit is read from screen automatically; fallback used when denominator is not visible)",
                      text_color="gray").grid(row=0, column=4, sticky="w", **pad)
 
         # ---- Save Button ----

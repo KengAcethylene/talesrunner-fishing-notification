@@ -23,10 +23,6 @@ windows = [
 pi = [
     "opencv-python-headless>=4.13",
 ]
-dev = [
-    "pyinstaller>=6.0",
-    "pyinstaller-hooks-contrib",
-]
 
 [project.scripts]
 talesrunner-cli = "index:main"

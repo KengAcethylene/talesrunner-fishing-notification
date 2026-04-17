@@ -407,18 +407,24 @@ def run_inference(frame, templates,
     raw_quota = clean_and_read_quota(crop(resized, roi_quota), templates)
 
     quota_current = None
+    quota_limit   = None
     clean_q = "".join(c for c in raw_quota if c.isdigit() or c == "/")
     try:
         if "/" in clean_q:
-            quota_current = int(clean_q.split("/")[0])
+            left, _, right = clean_q.partition("/")
+            if left:
+                quota_current = int(left)
+            if right:
+                quota_limit = int(right)
         elif len(clean_q) >= 3:
             quota_current = int(clean_q[:3])
     except ValueError:
         pass
 
     return {
-        "quota_raw": raw_quota,
+        "quota_raw":     raw_quota,
         "quota_current": quota_current,
+        "quota_limit":   quota_limit,   # None when denominator not visible
     }
 
 
