@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import NDIlib as ndi
 import time
 import threading
 import requests
@@ -28,10 +27,10 @@ HAS_DISPLAY = _has_display()
 # CONFIG
 # ============================================================
 _CONFIG_DEFAULTS = {
-    "ndi_source_name": "",
+    "virtual_camera_index": 0,      # cv2.VideoCapture index for OBS Virtual Camera
+    "virtual_camera_name": "",      # friendly name displayed in UI
     "canvas_size": [1280, 720],
     "roi_quota": [200, 480, 223, 142],
-    "roi_time":  [280, 180, 253, 163],
     "quota_limit": 550,
     "quota_alert_buffer": 50,
     "report_interval": 5,
@@ -101,10 +100,6 @@ class Config:
     @property
     def roi_quota(self):
         return tuple(int(x) for x in self._data["roi_quota"])
-
-    @property
-    def roi_time(self):
-        return tuple(int(x) for x in self._data["roi_time"])
 
     @property
     def templates_dir(self):
@@ -243,9 +238,62 @@ def preprocess_quota(img_roi):
     return thresh
 
 
+def _split_component(crop, gap_fraction: float = 0.10):
+    """Split a connected-component crop into individual characters.
+
+    Always runs vertical valley detection — no aspect-ratio guard, because
+    tall narrow fonts (aspect < 1) still produce multi-digit blobs.
+
+    Returns list of (x_offset_in_crop, sub_crop).
+    gap_fraction: columns whose dark-pixel density is below this fraction of
+                  the column-wise peak are treated as inter-character gaps.
+    """
+    ch, cw = crop.shape[:2]
+
+    # Count dark (ink) pixels per column
+    col_dark = np.sum(crop == 0, axis=0).astype(float)
+
+    if col_dark.max() == 0:
+        return [(0, crop)]
+
+    # Smooth over ~5 % of width to suppress intra-character valleys
+    k = max(1, cw // 20)
+    col_smooth = np.convolve(col_dark, np.ones(k) / k, mode='same')
+
+    in_char = col_smooth >= col_smooth.max() * gap_fraction
+
+    # Collect contiguous character regions
+    regions = []
+    start = None
+    for i, active in enumerate(in_char):
+        if active and start is None:
+            start = i
+        elif not active and start is not None:
+            regions.append((start, i))
+            start = None
+    if start is not None:
+        regions.append((start, cw))
+
+    # Discard slivers narrower than 15 % of the crop height (noise)
+    min_w = max(2, int(ch * 0.15))
+    regions = [(s, e) for s, e in regions if (e - s) >= min_w]
+
+    if len(regions) <= 1:
+        return [(0, crop)]
+
+    return [(s, crop[:, s:e]) for s, e in regions]
+
+
 def extract_char_crops(thresh):
     h, w = thresh.shape
-    inv = cv2.bitwise_not(thresh)
+
+    # Dilate the white background with a horizontal kernel to break thin
+    # pixel connections between touching characters before component analysis.
+    # Original thresh is kept for the actual crops (better shape for matching).
+    sep_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1))
+    sep = cv2.dilate(thresh, sep_kernel, iterations=1)
+
+    inv = cv2.bitwise_not(sep)
     n, _, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
 
     min_area = h * w * 0.005
@@ -253,7 +301,11 @@ def extract_char_crops(thresh):
     for i in range(1, n):
         cx, cy, cw, ch, area = stats[i]
         if area >= min_area:
-            comps.append((cx, cw, thresh[cy:cy + ch, cx:cx + cw]))
+            # Crop from original thresh (unmodified) for template quality
+            blob = thresh[cy:cy + ch, cx:cx + cw]
+            # _split_component as a secondary fallback for any still-merged blobs
+            for x_off, sub in _split_component(blob):
+                comps.append((cx + x_off, sub.shape[1], sub))
 
     if not comps:
         return []
@@ -288,38 +340,6 @@ def clean_and_read_quota(img_roi, templates):
         else:
             digit, score = match_digit(char_crop, templates)
             log(f"  x={x}: '{digit}' score={score:.2f}", "DEBUG")
-            result.append(digit)
-
-    return ''.join(result)
-
-
-def clean_and_read_time(img_roi, templates):
-    thresh = preprocess_quota(img_roi)
-    h, w = thresh.shape
-    inv = cv2.bitwise_not(thresh)
-    n, _, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
-
-    min_area = h * w * 0.003
-    comps = []
-    for i in range(1, n):
-        cx, cy, cw, ch, area = stats[i]
-        if area >= min_area:
-            comps.append((cx, area, thresh[cy:cy + ch, cx:cx + cw]))
-
-    if not comps:
-        return ''
-
-    comps.sort(key=lambda c: c[0])
-
-    max_area = max(c[1] for c in comps)
-
-    result = []
-    for cx, area, char_crop in comps:
-        if area < max_area * 0.25:
-            result.append(':')
-        else:
-            digit, score = match_digit(char_crop, templates)
-            log(f"  time x={cx}: '{digit}' score={score:.2f}", "DEBUG")
             result.append(digit)
 
     return ''.join(result)
@@ -385,11 +405,9 @@ def calibrate(frame, count_str, templates,
 # ============================================================
 def run_inference(frame, templates,
                   roi_quota=(200, 480, 223, 142),
-                  roi_time=(280, 180, 253, 163),
                   canvas_size=(1280, 720)):
     resized = cv2.resize(frame, canvas_size)
     raw_quota = clean_and_read_quota(crop(resized, roi_quota), templates)
-    raw_time = clean_and_read_time(crop(resized, roi_time), templates)
 
     quota_current = None
     clean_q = "".join(c for c in raw_quota if c.isdigit() or c == "/")
@@ -404,145 +422,122 @@ def run_inference(frame, templates,
     return {
         "quota_raw": raw_quota,
         "quota_current": quota_current,
-        "time_raw": raw_time,
     }
 
 
 # ============================================================
-# STREAM READER
+# CAMERA READER (OBS Virtual Camera / webcam)
 # ============================================================
-class FrameReader:
-    def __init__(self, source, copy_interval: float = 1.0):
-        """
-        copy_interval: minimum seconds between numpy copies.
-        NDI frames are received and freed at full rate to keep the sender's
-        buffer healthy; the expensive np.copy happens at most once per interval.
-        Default 1.0 s (1 FPS) is plenty for fish-quota monitoring and keeps
-        GIL pressure negligible so the tkinter UI stays responsive.
-        """
-        recv_desc = ndi.RecvCreateV3()
-        recv_desc.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
-        self._recv = ndi.recv_create_v3(recv_desc)
-        ndi.recv_connect(self._recv, source)
+class CameraFrameReader:
+    """Reads frames from a cv2.VideoCapture device (e.g. OBS Virtual Camera).
+    Exposes the same read() / release() interface as FrameReader.
+    """
+    def __init__(self, index: int, copy_interval: float = 1.0):
+        self._cap = cv2.VideoCapture(index)
         self._frame = None
-        self._ret = False
-        self._width = 0
-        self._height = 0
-        self._lock = threading.Lock()
-        self._stop = False
+        self._ret   = False
+        self._lock  = threading.Lock()
+        self._stop  = False
         self._copy_interval = copy_interval
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
-        connected = False
         while not self._stop:
-            # Before the first frame arrives the NDI connection is still establishing.
-            # Use a long timeout (2 s) so we don't spin — recv blocks in C code and
-            # releases the GIL while waiting.  Once connected, switch to a short
-            # timeout (100 ms) followed by an explicit sleep; the sleep releases the
-            # GIL unconditionally for copy_interval seconds so tkinter runs freely.
-            timeout_ms = 100 if connected else 2000
-            frame_type, video, audio, metadata = ndi.recv_capture_v2(self._recv, timeout_ms)
-            if frame_type == ndi.FRAME_TYPE_VIDEO:
-                frame = np.copy(video.data[:, :, :3])
-                h, w = frame.shape[:2]
-                ndi.recv_free_video_v2(self._recv, video)
+            ret, frame = self._cap.read()
+            if ret and frame is not None:
                 with self._lock:
-                    self._ret, self._frame = True, frame
-                    self._width, self._height = w, h
-                connected = True
-                time.sleep(self._copy_interval)
+                    self._ret   = True
+                    self._frame = frame
+            time.sleep(self._copy_interval)
 
     def read(self):
         with self._lock:
-            return (False, None) if self._frame is None else (self._ret, self._frame.copy())
+            if self._frame is None:
+                return False, None
+            return self._ret, self._frame.copy()
 
     def get(self, prop):
-        with self._lock:
-            if prop == cv2.CAP_PROP_FRAME_WIDTH:  return self._width
-            if prop == cv2.CAP_PROP_FRAME_HEIGHT: return self._height
-        return 0
+        return self._cap.get(prop)
 
     def release(self):
         self._stop = True
-        ndi.recv_destroy(self._recv)
+        self._cap.release()
 
 
-def scan_sources(timeout: int = 10) -> list:
-    """Discover NDI sources on the network. Returns list of source name strings."""
-    find = ndi.find_create_v2()
-    time.sleep(timeout)
-    sources = ndi.find_get_current_sources(find)
-    names = [s.ndi_name for s in sources] if sources else []
-    ndi.find_destroy(find)
-    return names
+def _get_camera_names_windows() -> list:
+    """Return camera device names via DirectShow (same order as cv2.CAP_DSHOW indices)."""
+    try:
+        from pygrabber.dshow_graph import FilterGraph
+        return FilterGraph().get_input_devices()
+    except Exception:
+        return []
 
 
-def open_stream(source_name: str, reconnect_delay: int = 5,
-                copy_interval: float = 1.0):
-    """Blocks until an NDI source is found and delivering frames."""
+def scan_cameras() -> list:
+    """Return list of (index, name) for all available camera devices.
+
+    Uses pygrabber to get the full DirectShow device list — same enumeration
+    order as cv2.CAP_DSHOW, so index N in the list == VideoCapture(N).
+    Includes devices that are registered but not yet streaming (e.g. OBS
+    Virtual Camera when OBS is open but virtual camera not started).
+    """
+    pnp_names = _get_camera_names_windows()
+    # Scan at least as many indices as pygrabber found, with a floor of 9
+    limit = max(9, len(pnp_names) - 1)
+    found  = []
+    name_i = 0
+
+    for i in range(limit + 1):
+        cap = cv2.VideoCapture(i)
+        opened = cap.isOpened()
+        cap.release()
+
+        if opened:
+            name = pnp_names[name_i] if name_i < len(pnp_names) else f"Camera {i}"
+            name_i += 1
+            found.append((i, name))
+
+    return found
+
+
+def open_camera_stream(index: int, copy_interval: float = 1.0,
+                       max_retries: int = None) -> CameraFrameReader:
+    """Open a camera by index and wait for the first frame (up to 5 s).
+
+    max_retries: None = infinite (CLI), 1 = fail fast (GUI).
+    """
+    attempt = 0
     while True:
-        label = f"'{source_name}'" if source_name else "(first available)"
-        log(f"Looking for NDI source {label}...")
-        find = ndi.find_create_v2()
-        deadline = time.time() + 10
-        source = None
-        while time.time() < deadline:
-            for src in ndi.find_get_current_sources(find):
-                if not source_name or source_name.lower() in src.ndi_name.lower():
-                    source = src
-                    break
-            if source:
-                break
-            time.sleep(0.5)
-
-        if source is None:
-            ndi.find_destroy(find)
-            log(f"No NDI source found. Retrying in {reconnect_delay}s...", "RETRY")
-            time.sleep(reconnect_delay)
-            continue
-
-        log(f"Found: {source.ndi_name}. Connecting...")
-        reader = FrameReader(source, copy_interval=copy_interval)
-        ndi.find_destroy(find)
-        # Poll until the first frame arrives (up to 10 s).
-        # A fixed sleep is unreliable because connection time varies.
-        deadline = time.time() + 10
+        if max_retries is not None and attempt >= max_retries:
+            raise RuntimeError(
+                f"Could not open camera index {index} after {max_retries} attempt(s).")
+        attempt += 1
+        log(f"Opening camera index {index}...")
+        reader = CameraFrameReader(index, copy_interval=copy_interval)
+        deadline = time.time() + 5
         while time.time() < deadline:
             ret, frame = reader.read()
             if ret and frame is not None:
-                log("SUCCESS: NDI source connected!", "OK")
+                log(f"Camera {index} ready.", "OK")
                 return reader
-            time.sleep(0.25)
+            time.sleep(0.2)
         reader.release()
-        log(f"FAILED: No frame in 10 s. Reconnecting in {reconnect_delay}s...", "RETRY")
-        time.sleep(reconnect_delay)
+        log(f"No frame from camera {index}.", "RETRY")
 
 
-def capture_frame(source_name: str = "",
-                  canvas_size=(1280, 720),
-                  roi_quota=(200, 480, 223, 142),
-                  output_path: str = "ndi_capture.jpg",
-                  reconnect_delay: int = 5):
-    """Grab one frame; save diagnostic images. Returns (frame, thresh_img) or (None, None)."""
-    reader = open_stream(source_name, reconnect_delay)
-    time.sleep(1)
-    ret, frame = reader.read()
-    reader.release()
+def get_source_label(cfg) -> str:
+    """Return a human-readable description of the configured camera."""
+    cam_name = cfg.get("virtual_camera_name", "").strip()
+    idx = cfg.get("virtual_camera_index", 0)
+    if cam_name:
+        return f"{cam_name}  (index {idx})"
+    return f"Camera index {idx}"
 
-    if not ret or frame is None:
-        log("Failed to grab frame.", "ERROR")
-        return None, None
 
-    h, w = frame.shape[:2]
-    log(f"Raw resolution : {w}x{h}")
-
-    resized = cv2.resize(frame, canvas_size)
-    cv2.imwrite(output_path, resized)
-    log(f"Saved frame   → {output_path}", "OK")
-
-    thresh = preprocess_quota(crop(resized, roi_quota))
-    cv2.imwrite("ndi_roi_thresh.jpg", thresh)
-    log("Saved thresh  → ndi_roi_thresh.jpg", "OK")
-
-    return frame, thresh
+def open_input_stream(cfg, max_retries: int = None) -> CameraFrameReader:
+    """Open the configured camera.  Pass max_retries=1 from GUI workers."""
+    return open_camera_stream(
+        int(cfg["virtual_camera_index"]),
+        copy_interval=cfg["capture_interval"],
+        max_retries=max_retries,
+    )

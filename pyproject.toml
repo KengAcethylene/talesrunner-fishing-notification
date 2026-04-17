@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "talesrunner-fish-monitor"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "NDI-based fish quota monitor for TalesRunner"
+dependencies = [
+    "numpy>=2.2",
+    "requests>=2.33",
+    "python-dotenv>=1.2",
+    "Pillow>=10.0",
+    "customtkinter>=5.2",
+]
+
+[project.optional-dependencies]
+windows = [
+    "opencv-python>=4.13",
+    "pygrabber>=0.1",
+]
+pi = [
+    "opencv-python-headless>=4.13",
+]
+dev = [
+    "pyinstaller>=6.0",
+    "pyinstaller-hooks-contrib",
+]
+
+[project.scripts]
+talesrunner-cli = "index:main"
+
+[project.gui-scripts]
+talesrunner = "app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gui"]
+include  = ["app.py", "core.py", "index.py"]

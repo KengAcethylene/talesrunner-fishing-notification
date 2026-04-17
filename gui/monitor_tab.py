@@ -1,28 +1,28 @@
 import tkinter as tk
-from tkinter import ttk
+import customtkinter as ctk
 import threading
 import time
 import os
 from datetime import datetime
 from collections import deque
 
+from gui import labeled_frame
 
-class MonitorTab(ttk.Frame):
+
+class MonitorTab(ctk.CTkFrame):
     def __init__(self, parent, app):
-        super().__init__(parent)
+        super().__init__(parent, fg_color="transparent")
         self.app = app
         self.cfg = app.cfg
 
         # Thread control
         self._monitor_thread = None
-        self._stop_event = threading.Event()
-        self._is_running = False
+        self._stop_event     = threading.Event()
+        self._is_running     = False
 
         # Display vars
-        self.quota_var = tk.StringVar(value="QUOTA: --/--")
-        self.time_var = tk.StringVar(value="GAME TIME: --:--:--")
+        self.quota_var  = tk.StringVar(value="QUOTA: --/--")
         self.uptime_var = tk.StringVar(value="Uptime: 00:00:00")
-        self.progress_var = tk.DoubleVar(value=0.0)
         self.status_var = tk.StringVar(value="Stopped")
 
         self._log_lines = deque(maxlen=200)
@@ -38,88 +38,85 @@ class MonitorTab(ttk.Frame):
 
     # ------------------------------------------------------------------
     def _build_ui(self):
-        # ---- Lock overlay (packed on top, hidden when unlocked) ----
-        self._lock_frame = tk.Frame(self, bg="#cc3333")
-        self._lock_label = tk.Label(
+        # ---- Lock overlay (placed on top, hidden when unlocked) ----
+        self._lock_frame = ctk.CTkFrame(self, fg_color="#cc3333", corner_radius=0)
+        self._lock_label = ctk.CTkLabel(
             self._lock_frame,
             text="",
-            bg="#cc3333", fg="white",
-            font=("Arial", 14, "bold"),
+            text_color="white",
+            font=ctk.CTkFont(size=14, weight="bold"),
         )
         self._lock_label.pack(expand=True)
 
         # ---- Main content ----
-        self._content_frame = ttk.Frame(self)
+        self._content_frame = ctk.CTkFrame(self, fg_color="transparent")
 
         # Top stats row
-        stats_frame = ttk.LabelFrame(self._content_frame, text="Live Stats")
-        stats_frame.pack(fill="x", padx=12, pady=(10, 4))
+        stats_outer, stats_frame = labeled_frame(self._content_frame, "Live Stats")
+        stats_outer.pack(fill="x", padx=12, pady=(10, 4))
 
-        # Quota display
-        ttk.Label(stats_frame, textvariable=self.quota_var,
-                  font=("Arial", 36, "bold"), foreground="#1a7abf").pack(
-            side="left", padx=20, pady=8)
+        ctk.CTkLabel(stats_frame, textvariable=self.quota_var,
+                     font=ctk.CTkFont(size=36, weight="bold"),
+                     text_color="#1a7abf").pack(side="left", padx=20, pady=8)
 
-        right_stats = ttk.Frame(stats_frame)
-        right_stats.pack(side="left", padx=20, pady=8)
-        ttk.Label(right_stats, textvariable=self.time_var,
-                  font=("Arial", 22)).pack(anchor="w")
-        ttk.Label(right_stats, textvariable=self.uptime_var,
-                  font=("Arial", 13), foreground="gray").pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(stats_frame, textvariable=self.uptime_var,
+                     font=ctk.CTkFont(size=16),
+                     text_color="gray").pack(side="left", padx=20, pady=8)
 
         # Progress bar
-        pb_frame = ttk.Frame(self._content_frame)
+        pb_frame = ctk.CTkFrame(self._content_frame, fg_color="transparent")
         pb_frame.pack(fill="x", padx=12, pady=4)
-        ttk.Label(pb_frame, text="Quota Progress:").pack(side="left")
-        self._progress = ttk.Progressbar(pb_frame, variable=self.progress_var,
-                                         maximum=100, length=400, mode="determinate")
+        ctk.CTkLabel(pb_frame, text="Quota Progress:").pack(side="left")
+        self._progress = ctk.CTkProgressBar(pb_frame, width=400)
+        self._progress.set(0)
         self._progress.pack(side="left", padx=8)
-        self._pct_label = ttk.Label(pb_frame, text="0%")
+        self._pct_label = ctk.CTkLabel(pb_frame, text="0%")
         self._pct_label.pack(side="left")
 
         # Status line
-        status_frame = ttk.Frame(self._content_frame)
+        status_frame = ctk.CTkFrame(self._content_frame, fg_color="transparent")
         status_frame.pack(fill="x", padx=12, pady=2)
-        ttk.Label(status_frame, text="Status:").pack(side="left")
-        self._status_label = ttk.Label(status_frame, textvariable=self.status_var,
-                                       foreground="gray")
+        ctk.CTkLabel(status_frame, text="Status:").pack(side="left")
+        self._status_label = ctk.CTkLabel(status_frame, textvariable=self.status_var,
+                                          text_color="gray")
         self._status_label.pack(side="left", padx=6)
 
         # ---- Buttons ----
-        btn_frame = ttk.Frame(self._content_frame)
+        btn_frame = ctk.CTkFrame(self._content_frame, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=8)
 
-        self._start_btn = ttk.Button(btn_frame, text="▶  Start",
-                                     command=self._on_start)
+        self._start_btn = ctk.CTkButton(btn_frame, text="▶  Start", width=100,
+                                        command=self._on_start)
         self._start_btn.pack(side="left", padx=4)
 
-        self._stop_btn = ttk.Button(btn_frame, text="■  Stop",
-                                    command=self._on_stop, state="disabled")
+        self._stop_btn = ctk.CTkButton(btn_frame, text="■  Stop", width=100,
+                                       command=self._on_stop, state="disabled",
+                                       fg_color="#8b2222", hover_color="#a03333")
         self._stop_btn.pack(side="left", padx=4)
 
         # ---- Log section ----
-        log_frame = ttk.LabelFrame(self._content_frame, text="Log")
-        log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        log_outer, log_frame = labeled_frame(self._content_frame, "Log")
+        log_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        self._log_text = tk.Text(log_frame, state="disabled",
-                                 wrap="word", height=14,
-                                 bg="#1e1e1e", fg="#d4d4d4",
-                                 font=("Consolas", 9),
-                                 relief="flat")
-        sb = ttk.Scrollbar(log_frame, orient="vertical",
-                           command=self._log_text.yview)
-        self._log_text.configure(yscrollcommand=sb.set)
-        self._log_text.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        self._log_text = ctk.CTkTextbox(
+            log_frame,
+            state="disabled",
+            wrap="word",
+            font=ctk.CTkFont(family="Consolas", size=9),
+            fg_color="#1e1e1e",
+            text_color="#d4d4d4",
+        )
+        self._log_text.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # Text tags for coloured levels
-        self._log_text.tag_configure("ALERT",    foreground="#ff9900")
-        self._log_text.tag_configure("CRITICAL", foreground="#ff4444")
-        self._log_text.tag_configure("ERROR",    foreground="#ff4444")
-        self._log_text.tag_configure("WARNING",  foreground="#ffcc00")
-        self._log_text.tag_configure("OK",       foreground="#44cc44")
-        self._log_text.tag_configure("RETRY",    foreground="#aaaaaa")
-        self._log_text.tag_configure("EXIT",     foreground="#aaaaaa")
+        # Coloured tags via the underlying tk.Text widget
+        tb = self._log_text._textbox
+        tb.tag_configure("ALERT",    foreground="#ff9900")
+        tb.tag_configure("CRITICAL", foreground="#ff4444")
+        tb.tag_configure("ERROR",    foreground="#ff4444")
+        tb.tag_configure("WARNING",  foreground="#ffcc00")
+        tb.tag_configure("OK",       foreground="#44cc44")
+        tb.tag_configure("RETRY",    foreground="#aaaaaa")
+        tb.tag_configure("EXIT",     foreground="#aaaaaa")
 
         # Pack main content
         self._content_frame.pack(fill="both", expand=True)
@@ -129,10 +126,9 @@ class MonitorTab(ttk.Frame):
 
     # ------------------------------------------------------------------
     def check_lock(self):
-        """Show/hide the lock overlay based on calibration completeness."""
         if not self._built:
             return
-        tdir = self.cfg.templates_dir
+        tdir  = self.cfg.templates_dir
         count = sum(
             1 for d in "0123456789"
             if os.path.exists(os.path.join(tdir, f"{d}.png"))
@@ -167,7 +163,6 @@ class MonitorTab(ttk.Frame):
         self._set_status("Stopping…", "orange")
 
     def _on_stopped(self):
-        """Called from main thread when worker exits."""
         self._is_running = False
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
@@ -176,20 +171,19 @@ class MonitorTab(ttk.Frame):
     # ------------------------------------------------------------------
     def _set_status(self, text, color="gray"):
         self.status_var.set(text)
-        self._status_label.configure(foreground=color)
+        self._status_label.configure(text_color=color)
 
-    # ------------------------------------------------------------------
-    # Monitor worker (runs in daemon thread)
     # ------------------------------------------------------------------
     def _monitor_worker(self):
         from core import (
-            MonitorSession, run_inference, open_stream, send_telegram, log as core_log,
+            MonitorSession, run_inference, open_input_stream, send_telegram, log as core_log,
         )
+
         from datetime import datetime
 
-        cfg = self.cfg
+        cfg       = self.cfg
         templates = self.app.templates
-        session = MonitorSession()
+        session   = MonitorSession()
 
         def _log(msg, level="INFO"):
             core_log(msg, level)
@@ -197,17 +191,13 @@ class MonitorTab(ttk.Frame):
 
         _log("Monitor started.")
 
-        # Try to reuse existing reader, otherwise open a new one
-        reader = self.app.frame_reader
+        reader       = self.app.frame_reader
         owned_reader = False
         if reader is None:
-            import NDIlib as ndi
-            ndi.initialize()
             try:
-                reader = open_stream(cfg["ndi_source_name"], cfg["reconnect_delay"],
-                                     copy_interval=cfg["capture_interval"])
+                reader = open_input_stream(cfg)
             except Exception as e:
-                _log(f"Failed to connect to NDI: {e}", "ERROR")
+                _log(f"Failed to connect to input source: {e}", "ERROR")
                 self.after(0, self._on_stopped)
                 return
             owned_reader = True
@@ -219,9 +209,7 @@ class MonitorTab(ttk.Frame):
                     _log("Lost stream — reconnecting…", "WARNING")
                     if owned_reader:
                         reader.release()
-                        reader = open_stream(cfg["ndi_source_name"],
-                                             cfg["reconnect_delay"],
-                                             copy_interval=cfg["capture_interval"])
+                        reader = open_input_stream(cfg)
                     else:
                         time.sleep(1)
                     continue
@@ -230,7 +218,6 @@ class MonitorTab(ttk.Frame):
                     result = run_inference(
                         frame, templates,
                         roi_quota=cfg.roi_quota,
-                        roi_time=cfg.roi_time,
                         canvas_size=cfg.canvas_size,
                     )
                 except Exception as e:
@@ -239,7 +226,6 @@ class MonitorTab(ttk.Frame):
                     continue
 
                 current = result["quota_current"]
-                raw_time = result.get("time_raw") or ""
 
                 if current is None:
                     session.no_read_seconds += cfg["capture_interval"]
@@ -249,39 +235,31 @@ class MonitorTab(ttk.Frame):
 
                 session.no_read_seconds = 0
 
-                # Session reset detection: count dropped to < 50% of last reading.
-                # Using prev_current (not start_count) so a reset back to the
-                # starting value (e.g. 0 → 0) is still caught.
+                # Session reset detection: count dropped to < 50% of last reading
                 if session.prev_current > 0 and current < session.prev_current // 2:
                     _log(f"Quota reset detected ({session.prev_current} → {current}). New session.")
-                    session.start_count = current
+                    session.start_count         = current
                     session.last_reported_count = current
-                    session.alert_sent = False
-                    session.limit_sent = False
-                    session.no_read_seconds = 0
-                    session.session_start_time = datetime.now()
+                    session.alert_sent          = False
+                    session.limit_sent          = False
+                    session.no_read_seconds     = 0
+                    session.session_start_time  = datetime.now()
                 elif session.start_count == -1:
                     session.start_count = current
                     _log(f"Session started. Initial count: {session.start_count}")
 
                 caught_now = current - session.start_count
-                limit = cfg["quota_limit"]
-                threshold = limit - cfg["quota_alert_buffer"]
+                limit      = cfg["quota_limit"]
+                threshold  = limit - cfg["quota_alert_buffer"]
 
-                # Update UI
                 self._post("quota", (current, limit))
-                if raw_time:
-                    self._post("time", raw_time)
                 uptime = str(datetime.now() - session.session_start_time).split('.')[0]
                 self._post("uptime", uptime)
 
-                # Log on interval
                 if current >= session.last_reported_count + cfg["report_interval"]:
-                    game_time = raw_time or "--:--:--"
-                    _log(f"FISH: {current}/{limit} (+{caught_now}) | GAME: {game_time} | UPTIME: {uptime}")
+                    _log(f"FISH: {current}/{limit} (+{caught_now}) | UPTIME: {uptime}")
                     session.last_reported_count = current
 
-                # Alerts
                 if current >= threshold and not session.alert_sent:
                     msg = f"QUOTA ALMOST FULL: {current}/{limit}"
                     _log(msg, "ALERT")
@@ -304,14 +282,10 @@ class MonitorTab(ttk.Frame):
             self.after(0, self._on_stopped)
 
     # ------------------------------------------------------------------
-    # Thread → UI bridge
-    # ------------------------------------------------------------------
     def _post(self, msg_type, payload):
-        """Put a message into app's log queue for GUI thread to process."""
         self.app.log_queue.put((msg_type, payload))
 
     def _apply_update(self, msg_type, payload):
-        """Called on main thread by App._poll_log_queue."""
         if not self._built:
             return
         if msg_type == "log":
@@ -321,34 +295,33 @@ class MonitorTab(ttk.Frame):
             current, limit = payload
             self.quota_var.set(f"QUOTA: {current}/{limit}")
             pct = min(100.0, current / limit * 100) if limit else 0
-            self.progress_var.set(pct)
+            self._progress.set(pct / 100)
             self._pct_label.configure(text=f"{pct:.0f}%")
-        elif msg_type == "time":
-            self.time_var.set(f"GAME TIME: {payload}")
         elif msg_type == "uptime":
             self.uptime_var.set(f"Uptime: {payload}")
 
     # ------------------------------------------------------------------
     def _append_log(self, line: str, level: str = "INFO"):
         self._log_lines.append((line, level))
-        self._log_text.configure(state="normal")
+        tb = self._log_text._textbox
+        tb.configure(state="normal")
         tag = level if level in ("ALERT", "CRITICAL", "ERROR", "WARNING",
                                  "OK", "RETRY", "EXIT") else None
         if tag:
-            self._log_text.insert("end", line + "\n", tag)
+            tb.insert("end", line + "\n", tag)
         else:
-            self._log_text.insert("end", line + "\n")
+            tb.insert("end", line + "\n")
 
-        # Trim to maxlen
-        num_lines = int(self._log_text.index("end-1c").split(".")[0])
+        num_lines = int(tb.index("end-1c").split(".")[0])
         if num_lines > 200:
-            self._log_text.delete("1.0", f"{num_lines - 200}.0")
+            tb.delete("1.0", f"{num_lines - 200}.0")
 
-        self._log_text.configure(state="disabled")
-        self._log_text.see("end")
+        tb.configure(state="disabled")
+        tb.see("end")
 
     def _clear_log(self):
         self._log_lines.clear()
-        self._log_text.configure(state="normal")
-        self._log_text.delete("1.0", "end")
-        self._log_text.configure(state="disabled")
+        tb = self._log_text._textbox
+        tb.configure(state="normal")
+        tb.delete("1.0", "end")
+        tb.configure(state="disabled")

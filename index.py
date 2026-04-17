@@ -10,12 +10,12 @@ from core import (
     send_telegram,
     load_templates, save_template,
     match_digit, preprocess_quota, extract_char_crops,
-    clean_and_read_quota, clean_and_read_time,
+    clean_and_read_quota,
     calibrate, run_inference,
-    FrameReader, open_stream, capture_frame, scan_sources,
+    CameraFrameReader, open_camera_stream, scan_cameras,
     HAS_DISPLAY, crop,
 )
-import NDIlib as ndi
+
 
 # ============================================================
 # DEBUG DISPLAY (CLI only)
@@ -51,21 +51,18 @@ def main(cfg: Config, debug: bool = False):
 
     session = MonitorSession()
 
-    reader = open_stream(cfg["ndi_source_name"], cfg["reconnect_delay"])
-    stream_w = int(reader.get(cv2.CAP_PROP_FRAME_WIDTH))
-    stream_h = int(reader.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    log(f"Stream: {stream_w}x{stream_h} → canvas {cfg.canvas_size[0]}x{cfg.canvas_size[1]}")
+    reader = open_camera_stream(cfg["virtual_camera_index"])
+    log(f"Camera {cfg['virtual_camera_index']} open → canvas {cfg.canvas_size[0]}x{cfg.canvas_size[1]}")
     log(f"Monitoring {'[DEBUG]' if debug else ''}. Waiting for first valid read...")
 
     while True:
         ret, frame = reader.read()
         if not ret or frame is None:
-            log("Lost stream — reconnecting...", "WARNING")
-            reader.release()
-            reader = open_stream(cfg["ndi_source_name"], cfg["reconnect_delay"])
+            log("No frame — waiting…", "WARNING")
+            time.sleep(1)
             continue
 
-        result = run_inference(frame, templates, cfg.roi_quota, cfg.roi_time, cfg.canvas_size)
+        result = run_inference(frame, templates, cfg.roi_quota, cfg.canvas_size)
         current = result["quota_current"]
 
         if debug:
@@ -91,7 +88,6 @@ def main(cfg: Config, debug: bool = False):
 
         session.no_read_seconds = 0
 
-        # Session reset detection: count dropped to < 50% of last reading.
         if session.prev_current > 0 and current < session.prev_current // 2:
             log(f"Quota reset detected ({session.prev_current} → {current}). Starting new session.")
             session.start_count = current
@@ -105,12 +101,11 @@ def main(cfg: Config, debug: bool = False):
             log(f"Session started. Initial count: {session.start_count}")
 
         caught_now = current - session.start_count
-        threshold = cfg["quota_limit"] - cfg["quota_alert_buffer"]
+        threshold  = cfg["quota_limit"] - cfg["quota_alert_buffer"]
 
         if current >= session.last_reported_count + cfg["report_interval"]:
             uptime = str(datetime.now() - session.session_start_time).split('.')[0]
-            game_time = result.get("time_raw") or "--:--:--"
-            log(f"FISH: {current}/{cfg['quota_limit']} (+{caught_now}) | GAME: {game_time} | UPTIME: {uptime}")
+            log(f"FISH: {current}/{cfg['quota_limit']} (+{caught_now}) | UPTIME: {uptime}")
             session.last_reported_count = current
 
         if current >= threshold and not session.alert_sent:
@@ -140,19 +135,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TalesRunner fish monitor")
     parser.add_argument("--debug", action="store_true",
                         help="Show live ROI and threshold windows")
-    parser.add_argument("--capture", action="store_true",
-                        help="Grab one frame and save diagnostic images, then exit")
-    parser.add_argument("--calibrate", metavar="COUNT",
-                        help="Capture frame and save digit templates for COUNT "
-                             "(e.g. --calibrate 483)")
+    parser.add_argument("--list-cameras", action="store_true",
+                        help="List available camera devices, then exit")
     parser.add_argument("--telegram-debug", action="store_true",
                         help="Send every log message to Telegram (tests bot)")
     parser.add_argument("--log-file", metavar="PATH",
                         help="Write all log output to a file (e.g. --log-file monitor.log)")
     parser.add_argument("--no-timeout", action="store_true",
                         help="Disable auto-shutdown when no numbers are detected")
-    parser.add_argument("--list-sources", action="store_true",
-                        help="Discover and list NDI sources on the network, then exit")
     args = parser.parse_args()
 
     cfg = Config()
@@ -167,53 +157,27 @@ if __name__ == "__main__":
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], line)
         set_log_callback(_tg_relay)
 
-    ndi.initialize()
-    try:
-        if args.list_sources:
-            print("Searching for NDI sources (10s)...")
-            sources = scan_sources(10)
-            if sources:
-                print(f"Found {len(sources)} source(s):")
-                for s in sources:
-                    print(f"  {s}")
-            else:
-                print("No NDI sources found.")
+    if args.list_cameras:
+        print("Scanning cameras…")
+        cameras = scan_cameras()
+        if cameras:
+            print(f"Found {len(cameras)} camera(s):")
+            for idx, name in cameras:
+                print(f"  [{idx}] {name}")
         else:
-            log_fh = None
-            if args.log_file:
-                log_fh = open(args.log_file, "a", encoding="utf-8")
-                set_log_file(log_fh)
-                log(f"Logging to {args.log_file}")
-            try:
-                if args.capture:
-                    capture_frame(
-                        source_name=cfg["ndi_source_name"],
-                        canvas_size=cfg.canvas_size,
-                        roi_quota=cfg.roi_quota,
-                        reconnect_delay=cfg["reconnect_delay"],
-                    )
-                elif args.calibrate:
-                    frame, _ = capture_frame(
-                        source_name=cfg["ndi_source_name"],
-                        canvas_size=cfg.canvas_size,
-                        roi_quota=cfg.roi_quota,
-                        reconnect_delay=cfg["reconnect_delay"],
-                    )
-                    if frame is not None:
-                        templates = load_templates(cfg.templates_dir)
-                        calibrate(frame, args.calibrate, templates,
-                                  roi_quota=cfg.roi_quota,
-                                  quota_limit=cfg["quota_limit"],
-                                  canvas_size=cfg.canvas_size,
-                                  templates_dir=cfg.templates_dir)
-                else:
-                    main(cfg, debug=args.debug)
-            finally:
-                if log_fh:
-                    log_fh.close()
-    except KeyboardInterrupt:
-        log("Process terminated by user.", "EXIT")
-        if HAS_DISPLAY:
-            cv2.destroyAllWindows()
-    finally:
-        ndi.destroy()
+            print("No cameras found.")
+    else:
+        log_fh = None
+        if args.log_file:
+            log_fh = open(args.log_file, "a", encoding="utf-8")
+            set_log_file(log_fh)
+            log(f"Logging to {args.log_file}")
+        try:
+            main(cfg, debug=args.debug)
+        except KeyboardInterrupt:
+            log("Process terminated by user.", "EXIT")
+            if HAS_DISPLAY:
+                cv2.destroyAllWindows()
+        finally:
+            if log_fh:
+                log_fh.close()

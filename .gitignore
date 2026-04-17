@@ -4,3 +4,5 @@ __pycache__/
 log
 ndi*.jpg
 config.json
+build/
+dist/

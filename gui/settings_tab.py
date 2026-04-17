@@ -1,25 +1,26 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 import threading
 import os
 
+from gui import labeled_frame
 
-class SettingsTab(ttk.Frame):
+
+class SettingsTab(ctk.CTkFrame):
     def __init__(self, parent, app):
-        super().__init__(parent)
+        super().__init__(parent, fg_color="transparent")
         self.app = app
         self.cfg = app.cfg
 
-        # StringVars
-        self.ndi_source_var = tk.StringVar()
-        self.token_var = tk.StringVar()
-        self.chat_id_var = tk.StringVar()
-        self.canvas_size_var = tk.StringVar()
-        self.obs_res_var = tk.StringVar()
-
-        # IntVars
-        self.quota_limit_var = tk.IntVar()
-        self.alert_buffer_var = tk.IntVar()
+        self.cam_display_var  = tk.StringVar()   # "Name (index N)" or ""
+        self._cam_choices     = []               # [(index, name), ...]
+        self.token_var        = tk.StringVar()
+        self.chat_id_var      = tk.StringVar()
+        self.canvas_size_var  = tk.StringVar()
+        self.obs_res_var      = tk.StringVar()
+        self.quota_limit_var  = tk.StringVar()
+        self.alert_buffer_var = tk.StringVar()
 
         self._built = False
 
@@ -34,149 +35,154 @@ class SettingsTab(ttk.Frame):
     def _build_ui(self):
         pad = {"padx": 8, "pady": 4}
 
-        # ---- NDI Source ----
-        ndi_frame = ttk.LabelFrame(self, text="NDI Source")
-        ndi_frame.pack(fill="x", padx=12, pady=(12, 4))
+        # ---- OBS Virtual Camera ----
+        cam_outer, cam_frame = labeled_frame(self, "OBS Virtual Camera")
+        cam_outer.pack(fill="x", padx=12, pady=(12, 4))
 
-        ttk.Label(ndi_frame, text="Source name (leave blank = first found):").grid(
+        ctk.CTkLabel(cam_frame, text="Camera:").grid(
             row=0, column=0, sticky="w", **pad)
-        self._ndi_entry = ttk.Entry(ndi_frame, textvariable=self.ndi_source_var, width=38)
-        self._ndi_entry.grid(row=0, column=1, sticky="ew", **pad)
-
-        self._scan_btn = ttk.Button(ndi_frame, text="Scan Sources (10s)",
-                                    command=self._on_scan_sources)
-        self._scan_btn.grid(row=0, column=2, **pad)
-
-        ttk.Label(ndi_frame, text="Discovered sources:").grid(
-            row=1, column=0, sticky="nw", **pad)
-        list_frame = ttk.Frame(ndi_frame)
-        list_frame.grid(row=1, column=1, columnspan=2, sticky="ew", **pad)
-        self._sources_listbox = tk.Listbox(list_frame, height=4, selectmode=tk.SINGLE)
-        sb = ttk.Scrollbar(list_frame, orient="vertical",
-                           command=self._sources_listbox.yview)
-        self._sources_listbox.configure(yscrollcommand=sb.set)
-        self._sources_listbox.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        self._sources_listbox.bind("<<ListboxSelect>>", self._on_source_select)
-
-        self._scan_status = ttk.Label(ndi_frame, text="", foreground="gray")
-        self._scan_status.grid(row=2, column=0, columnspan=3, sticky="w", **pad)
-
-        ndi_frame.columnconfigure(1, weight=1)
+        self._cam_combo = ctk.CTkComboBox(
+            cam_frame, variable=self.cam_display_var,
+            values=[], width=320,
+            command=lambda v: self.cam_display_var.set(v),
+        )
+        self._cam_combo.grid(row=0, column=1, sticky="ew", **pad)
+        self._scan_cam_btn = ctk.CTkButton(cam_frame, text="Scan Cameras",
+                                           width=130, command=self._on_scan_cameras)
+        self._scan_cam_btn.grid(row=0, column=2, **pad)
+        self._cam_status = ctk.CTkLabel(cam_frame,
+                                        text="Enable OBS Virtual Camera in OBS first, then Scan.",
+                                        text_color="gray")
+        self._cam_status.grid(row=1, column=0, columnspan=3, sticky="w", **pad)
+        cam_frame.grid_columnconfigure(1, weight=1)
 
         # ---- Telegram ----
-        tg_frame = ttk.LabelFrame(self, text="Telegram Notifications")
-        tg_frame.pack(fill="x", padx=12, pady=4)
+        tg_outer, tg_frame = labeled_frame(self, "Telegram Notifications")
+        tg_outer.pack(fill="x", padx=12, pady=4)
 
-        ttk.Label(tg_frame, text="Bot Token:").grid(row=0, column=0, sticky="w", **pad)
-        ttk.Entry(tg_frame, textvariable=self.token_var, width=45, show="*").grid(
+        ctk.CTkLabel(tg_frame, text="Bot Token:").grid(row=0, column=0, sticky="w", **pad)
+        ctk.CTkEntry(tg_frame, textvariable=self.token_var, width=350, show="*").grid(
             row=0, column=1, sticky="ew", **pad)
 
-        ttk.Label(tg_frame, text="Chat ID:").grid(row=1, column=0, sticky="w", **pad)
-        ttk.Entry(tg_frame, textvariable=self.chat_id_var, width=45).grid(
+        ctk.CTkLabel(tg_frame, text="Chat ID:").grid(row=1, column=0, sticky="w", **pad)
+        ctk.CTkEntry(tg_frame, textvariable=self.chat_id_var, width=350).grid(
             row=1, column=1, sticky="ew", **pad)
 
-        ttk.Button(tg_frame, text="Test Telegram", command=self._on_test_telegram).grid(
-            row=1, column=2, **pad)
+        ctk.CTkButton(tg_frame, text="Test Telegram", width=130,
+                      command=self._on_test_telegram).grid(row=1, column=2, **pad)
 
-        tg_frame.columnconfigure(1, weight=1)
+        tg_frame.grid_columnconfigure(1, weight=1)
+
+        # Keep a reference to the telegram frame so we can pack after it
+        self._tg_outer = tg_outer
 
         # ---- Quota Settings ----
-        quota_frame = ttk.LabelFrame(self, text="Quota Settings")
-        quota_frame.pack(fill="x", padx=12, pady=4)
+        quota_outer, quota_frame = labeled_frame(self, "Quota Settings")
+        quota_outer.pack(fill="x", padx=12, pady=4)
 
-        ttk.Label(quota_frame, text="Quota Limit:").grid(row=0, column=0, sticky="w", **pad)
-        ttk.Spinbox(quota_frame, from_=1, to=9999, textvariable=self.quota_limit_var,
-                    width=8).grid(row=0, column=1, sticky="w", **pad)
+        ctk.CTkLabel(quota_frame, text="Quota Limit:").grid(row=0, column=0, sticky="w", **pad)
+        ctk.CTkEntry(quota_frame, textvariable=self.quota_limit_var, width=80).grid(
+            row=0, column=1, sticky="w", **pad)
 
-        ttk.Label(quota_frame, text="Alert Buffer:").grid(row=0, column=2, sticky="w", **pad)
-        ttk.Spinbox(quota_frame, from_=0, to=999, textvariable=self.alert_buffer_var,
-                    width=8).grid(row=0, column=3, sticky="w", **pad)
-        ttk.Label(quota_frame, text="(send alert when quota ≥ limit − buffer)").grid(
-            row=0, column=4, sticky="w", **pad)
+        ctk.CTkLabel(quota_frame, text="Alert Buffer:").grid(row=0, column=2, sticky="w", **pad)
+        ctk.CTkEntry(quota_frame, textvariable=self.alert_buffer_var, width=80).grid(
+            row=0, column=3, sticky="w", **pad)
+        ctk.CTkLabel(quota_frame,
+                     text="(send alert when quota ≥ limit − buffer)",
+                     text_color="gray").grid(row=0, column=4, sticky="w", **pad)
 
         # ---- Canvas Resolution ----
-        canvas_frame = ttk.LabelFrame(self, text="Processing Canvas Resolution")
-        canvas_frame.pack(fill="x", padx=12, pady=4)
+        canvas_outer, canvas_frame = labeled_frame(self, "Processing Canvas Resolution")
+        canvas_outer.pack(fill="x", padx=12, pady=4)
 
-        ttk.Label(canvas_frame, text="Canvas Size:").grid(row=0, column=0, sticky="w", **pad)
-        ttk.Combobox(canvas_frame, textvariable=self.canvas_size_var,
-                     values=["1280x720", "640x360"],
-                     state="readonly", width=12).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(canvas_frame, text="(resize NDI frame to this before ROI lookup)").grid(
-            row=0, column=2, sticky="w", **pad)
+        ctk.CTkLabel(canvas_frame, text="Canvas Size:").grid(row=0, column=0, sticky="w", **pad)
+        ctk.CTkComboBox(canvas_frame, variable=self.canvas_size_var,
+                        values=["1280x720", "640x360"],
+                        state="readonly", width=140).grid(row=0, column=1, sticky="w", **pad)
+        ctk.CTkLabel(canvas_frame,
+                     text="(resize input frame to this before ROI lookup)",
+                     text_color="gray").grid(row=0, column=2, sticky="w", **pad)
 
         # ---- OBS Export ----
-        obs_frame = ttk.LabelFrame(self, text="OBS Profile Export")
-        obs_frame.pack(fill="x", padx=12, pady=4)
+        obs_outer, obs_frame = labeled_frame(self, "OBS Profile Export")
+        obs_outer.pack(fill="x", padx=12, pady=4)
 
-        ttk.Label(obs_frame, text="OBS Output Resolution:").grid(row=0, column=0, sticky="w", **pad)
-        ttk.Combobox(obs_frame, textvariable=self.obs_res_var,
-                     values=["1280x720", "640x360"],
-                     state="readonly", width=12).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(obs_frame, text="@ 1 FPS  (low FPS is fine for fish monitoring)").grid(
-            row=0, column=2, sticky="w", **pad)
+        ctk.CTkLabel(obs_frame, text="OBS Output Resolution:").grid(
+            row=0, column=0, sticky="w", **pad)
+        ctk.CTkComboBox(obs_frame, variable=self.obs_res_var,
+                        values=["1280x720", "640x360"],
+                        state="readonly", width=140).grid(row=0, column=1, sticky="w", **pad)
+        ctk.CTkLabel(obs_frame,
+                     text="@ 1 FPS  (low FPS is fine for fish monitoring)",
+                     text_color="gray").grid(row=0, column=2, sticky="w", **pad)
+        ctk.CTkButton(obs_frame, text="Export OBS Profile…", width=160,
+                      command=self._on_export_obs).grid(row=0, column=3, **pad)
 
-        ttk.Button(obs_frame, text="Export OBS Profile…",
-                   command=self._on_export_obs).grid(row=0, column=3, **pad)
-
-        obs_frame.columnconfigure(2, weight=1)
+        obs_frame.grid_columnconfigure(2, weight=1)
 
         # ---- Save Button ----
-        btn_frame = ttk.Frame(self)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=(8, 12))
-        ttk.Button(btn_frame, text="Save Settings", command=self._on_save).pack(side="left")
-        self._save_status = ttk.Label(btn_frame, text="", foreground="green")
+        ctk.CTkButton(btn_frame, text="Save Settings", width=130,
+                      command=self._on_save).pack(side="left")
+        self._save_status = ctk.CTkLabel(btn_frame, text="", text_color="green")
         self._save_status.pack(side="left", padx=8)
 
     # ------------------------------------------------------------------
     def _load_from_config(self):
-        self.ndi_source_var.set(self.cfg["ndi_source_name"])
+        idx  = self.cfg.get("virtual_camera_index", 0)
+        name = self.cfg.get("virtual_camera_name", "").strip()
+        display = f"{name}  (index {idx})" if name else (f"Camera {idx}" if idx else "")
+        self.cam_display_var.set(display)
+        if display:
+            self._cam_combo.configure(values=[display])
         self.token_var.set(self.cfg["telegram_bot_token"])
         self.chat_id_var.set(self.cfg["telegram_chat_id"])
-        self.quota_limit_var.set(self.cfg["quota_limit"])
-        self.alert_buffer_var.set(self.cfg["quota_alert_buffer"])
+        self.quota_limit_var.set(str(self.cfg["quota_limit"]))
+        self.alert_buffer_var.set(str(self.cfg["quota_alert_buffer"]))
         w, h = self.cfg.canvas_size
         self.canvas_size_var.set(f"{w}x{h}")
         self.obs_res_var.set(self.cfg["obs_export_resolution"])
 
     # ------------------------------------------------------------------
-    def _on_scan_sources(self):
-        self._scan_btn.configure(state="disabled")
-        self._scan_status.configure(text="Scanning… (10s)", foreground="orange")
-        self._sources_listbox.delete(0, tk.END)
+    def _on_scan_cameras(self):
+        self._scan_cam_btn.configure(state="disabled")
+        self._cam_status.configure(text="Scanning cameras 0–5…", text_color="orange")
 
         def _worker():
-            from core import scan_sources
-            import NDIlib as ndi
-            ndi.initialize()
-            try:
-                names = scan_sources(10)
-            finally:
-                ndi.destroy()
-            self.after(0, lambda: self._populate_sources(names))
+            from core import scan_cameras
+            cameras = scan_cameras()
+            self.after(0, lambda: self._populate_cameras(cameras))
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _populate_sources(self, names):
-        self._sources_listbox.delete(0, tk.END)
-        for n in names:
-            self._sources_listbox.insert(tk.END, n)
-        count = len(names)
-        msg = f"Found {count} source(s)" if count else "No sources found"
-        self._scan_status.configure(
-            text=msg, foreground="green" if count else "red")
-        self._scan_btn.configure(state="normal")
+    def _populate_cameras(self, cameras):
+        # cameras = [(index, name), ...]
+        self._scan_cam_btn.configure(state="normal")
+        self._cam_choices = cameras
+        if not cameras:
+            self._cam_status.configure(text="No cameras found.", text_color="red")
+            self._cam_combo.configure(values=[])
+            return
 
-    def _on_source_select(self, event):
-        sel = self._sources_listbox.curselection()
-        if sel:
-            self.ndi_source_var.set(self._sources_listbox.get(sel[0]))
+        values = [f"{name}  (index {idx})" for idx, name in cameras]
+        self._cam_combo.configure(values=values)
+
+        # Keep current selection if it still exists, else pick first
+        current = self.cam_display_var.get()
+        if current not in values:
+            self._cam_combo.set(values[0])
+        else:
+            self._cam_combo.set(current)
+
+        self._cam_status.configure(
+            text=f"Found {len(cameras)} camera(s). Select the OBS Virtual Camera.",
+            text_color="green")
 
     # ------------------------------------------------------------------
     def _on_test_telegram(self):
         from core import send_telegram
-        token = self.token_var.get().strip()
+        token   = self.token_var.get().strip()
         chat_id = self.chat_id_var.get().strip()
         if not token or not chat_id:
             messagebox.showwarning("Missing", "Enter both Bot Token and Chat ID first.")
@@ -189,14 +195,35 @@ class SettingsTab(ttk.Frame):
 
     # ------------------------------------------------------------------
     def _on_save(self):
-        self.cfg.set("ndi_source_name", self.ndi_source_var.get().strip())
         self.cfg.set("telegram_bot_token", self.token_var.get().strip())
-        self.cfg.set("telegram_chat_id", self.chat_id_var.get().strip())
-        self.cfg.set("quota_limit", int(self.quota_limit_var.get()))
-        self.cfg.set("quota_alert_buffer", int(self.alert_buffer_var.get()))
+        self.cfg.set("telegram_chat_id",   self.chat_id_var.get().strip())
         self.cfg.set("obs_export_resolution", self.obs_res_var.get())
 
-        # Canvas size
+        # Parse camera index and name from display string "Name  (index N)"
+        import re
+        cam_display = self.cam_display_var.get().strip()
+        m = re.search(r'\(index\s+(\d+)\)\s*$', cam_display)
+        if m:
+            cam_idx  = int(m.group(1))
+            cam_name = cam_display[:m.start()].strip().rstrip()
+        else:
+            # Fallback: display string is just a plain number
+            try:
+                cam_idx  = int(cam_display) if cam_display else 0
+                cam_name = ""
+            except ValueError:
+                messagebox.showerror("Error", "Select a camera from the dropdown or scan first.")
+                return
+        self.cfg.set("virtual_camera_index", cam_idx)
+        self.cfg.set("virtual_camera_name",  cam_name)
+
+        try:
+            self.cfg.set("quota_limit",        int(self.quota_limit_var.get()))
+            self.cfg.set("quota_alert_buffer", int(self.alert_buffer_var.get()))
+        except ValueError:
+            messagebox.showerror("Error", "Quota Limit and Alert Buffer must be integers.")
+            return
+
         cs = self.canvas_size_var.get()
         try:
             w, h = (int(v) for v in cs.split("x"))
@@ -206,7 +233,10 @@ class SettingsTab(ttk.Frame):
             return
 
         self.cfg.save()
-        self._save_status.configure(text="Saved!")
+        # Refresh source label on tabs that display it
+        for tab in (self.app.roi_tab, self.app.calibration_tab):
+            tab.refresh_source_label()
+        self._save_status.configure(text="Saved!", text_color="green")
         self.after(2000, lambda: self._save_status.configure(text=""))
 
     # ------------------------------------------------------------------
