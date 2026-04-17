@@ -43,7 +43,7 @@ def show_debug(frame, result, canvas_size, roi_quota):
 # ============================================================
 # MAIN LOOP
 # ============================================================
-def main(cfg: Config, debug: bool = False):
+def main(cfg: Config, debug: bool = False, night_mode: bool = False):
     templates = load_templates(cfg.templates_dir)
     if not templates:
         log("No templates found. Run:  py index.py --calibrate <current_count>", "WARNING")
@@ -112,13 +112,21 @@ def main(cfg: Config, debug: bool = False):
         if current >= threshold and not session.alert_sent:
             msg = f"QUOTA ALMOST FULL: {current}/{limit}"
             log(msg, "ALERT")
-            send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+            if not night_mode:
+                send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
             session.alert_sent = True
 
         if current >= limit and not session.limit_sent:
             msg = f"LIMIT REACHED: {current}/{limit}"
             log(msg, "CRITICAL")
-            send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+            if not night_mode:
+                send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+            else:
+                log("Night mode: shutting down in 5 minutes.", "WARNING")
+                time.sleep(300)
+                log("Night mode shutdown.", "EXIT")
+                reader.release()
+                break
             session.limit_sent = True
 
         session.prev_current = current
@@ -144,6 +152,8 @@ if __name__ == "__main__":
                         help="Write all log output to a file (e.g. --log-file monitor.log)")
     parser.add_argument("--no-timeout", action="store_true",
                         help="Disable auto-shutdown when no numbers are detected")
+    parser.add_argument("--night-mode", action="store_true",
+                        help="Disable all alerts; shut down automatically 5 minutes after limit is reached")
     args = parser.parse_args()
 
     cfg = Config()
@@ -174,7 +184,7 @@ if __name__ == "__main__":
             set_log_file(log_fh)
             log(f"Logging to {args.log_file}")
         try:
-            main(cfg, debug=args.debug)
+            main(cfg, debug=args.debug, night_mode=args.night_mode)
         except KeyboardInterrupt:
             log("Process terminated by user.", "EXIT")
             if HAS_DISPLAY:

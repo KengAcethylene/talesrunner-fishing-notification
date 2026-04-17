@@ -20,6 +20,10 @@ class MonitorTab(ctk.CTkFrame):
         self._stop_event     = threading.Event()
         self._is_running     = False
 
+        # Night mode
+        self._night_mode       = False
+        self._shutdown_after_id = None
+
         # Display vars
         self.quota_var  = tk.StringVar(value="QUOTA: --/--")
         self.uptime_var = tk.StringVar(value="Uptime: 00:00:00")
@@ -94,6 +98,13 @@ class MonitorTab(ctk.CTkFrame):
                                        fg_color="#8b2222", hover_color="#a03333")
         self._stop_btn.pack(side="left", padx=4)
 
+        self._night_btn = ctk.CTkButton(
+            btn_frame, text="🌙  Night Mode: OFF", width=160,
+            command=self._on_toggle_night,
+            fg_color="#333333", hover_color="#444444",
+        )
+        self._night_btn.pack(side="left", padx=4)
+
         # ---- Log section ----
         log_outer, log_frame = labeled_frame(self._content_frame, "Log")
         log_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -159,6 +170,7 @@ class MonitorTab(ctk.CTkFrame):
 
     def _on_stop(self):
         self._stop_event.set()
+        self._cancel_shutdown()
         self._stop_btn.configure(state="disabled")
         self._set_status("Stopping…", "orange")
 
@@ -167,6 +179,31 @@ class MonitorTab(ctk.CTkFrame):
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
         self._set_status("Stopped", "gray")
+
+    def _on_toggle_night(self):
+        from core import log as core_log
+        self._night_mode = not self._night_mode
+        if self._night_mode:
+            self._night_btn.configure(text="🌙  Night Mode: ON", fg_color="#1a4a7a",
+                                      hover_color="#1e5a96")
+            msg = "Night mode enabled — all alerts suppressed. App will auto-shutdown 5 minutes after limit is reached."
+        else:
+            self._night_btn.configure(text="🌙  Night Mode: OFF", fg_color="#333333",
+                                      hover_color="#444444")
+            self._cancel_shutdown()
+            msg = "Night mode disabled — alerts restored. Auto-shutdown is disabled."
+        core_log(msg, "INFO")
+        ts = datetime.now().strftime('%H:%M:%S')
+        self._append_log(f"[{ts}] [INFO] {msg}", "INFO")
+
+    def _cancel_shutdown(self):
+        if self._shutdown_after_id is not None:
+            self.after_cancel(self._shutdown_after_id)
+            self._shutdown_after_id = None
+
+    def _night_shutdown(self):
+        self._shutdown_after_id = None
+        self.app._on_close()
 
     # ------------------------------------------------------------------
     def _set_status(self, text, color="gray"):
@@ -238,6 +275,7 @@ class MonitorTab(ctk.CTkFrame):
                 # Session reset detection: count dropped to < 50% of last reading
                 if session.prev_current > 0 and current < session.prev_current // 2:
                     _log(f"Quota reset detected ({session.prev_current} → {current}). New session.")
+                    self._post("cancel_shutdown", None)
                     session.start_count         = current
                     session.last_reported_count = current
                     session.alert_sent          = False
@@ -263,13 +301,18 @@ class MonitorTab(ctk.CTkFrame):
                 if current >= threshold and not session.alert_sent:
                     msg = f"QUOTA ALMOST FULL: {current}/{limit}"
                     _log(msg, "ALERT")
-                    send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+                    if not self._night_mode:
+                        send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
                     session.alert_sent = True
 
                 if current >= limit and not session.limit_sent:
                     msg = f"LIMIT REACHED: {current}/{limit}"
                     _log(msg, "CRITICAL")
-                    send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+                    if not self._night_mode:
+                        send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+                    else:
+                        _log("Night mode: app will close in 5 minutes.", "WARNING")
+                        self._post("night_shutdown", 300_000)
                     session.limit_sent = True
 
                 session.prev_current = current
@@ -299,6 +342,13 @@ class MonitorTab(ctk.CTkFrame):
             self._pct_label.configure(text=f"{pct:.0f}%")
         elif msg_type == "uptime":
             self.uptime_var.set(f"Uptime: {payload}")
+        elif msg_type == "night_shutdown":
+            delay_ms = payload
+            minutes = delay_ms // 60_000
+            self._set_status(f"Night mode: closing in {minutes}m…", "orange")
+            self._shutdown_after_id = self.after(delay_ms, self._night_shutdown)
+        elif msg_type == "cancel_shutdown":
+            self._cancel_shutdown()
 
     # ------------------------------------------------------------------
     def _append_log(self, line: str, level: str = "INFO"):
