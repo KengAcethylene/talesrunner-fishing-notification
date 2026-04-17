@@ -22,6 +22,7 @@ a = Analysis(
     datas=[
         ('templates', 'templates'),
         ('gui', 'gui'),
+        ('ingame-crop-example.jpg', '.'),
         *ctk_datas,
     ],
     hiddenimports=[
@@ -68,23 +69,14 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     name='TalesRunnerMonitor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='TalesRunnerMonitor',
+    runtime_tmpdir=None,
 )

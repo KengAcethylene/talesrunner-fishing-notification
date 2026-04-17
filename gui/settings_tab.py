@@ -70,17 +70,6 @@ class SettingsTab(ctk.CTkFrame):
 
         tg_frame.grid_columnconfigure(1, weight=1)
 
-        # ---- OBS Setup Notice ----
-        obs_notice = ctk.CTkFrame(self, fg_color=("#fff3cd", "#3a3000"), corner_radius=6)
-        obs_notice.pack(fill="x", padx=12, pady=4)
-        ctk.CTkLabel(
-            obs_notice,
-            text="OBS Setup Required: set Canvas Resolution and Output Resolution to 1280×720 in OBS → Settings → Video.",
-            text_color=("#7a5800", "#ffd966"),
-            wraplength=800,
-            justify="left",
-        ).pack(anchor="w", padx=10, pady=6)
-
         # ---- Quota Settings ----
         quota_outer, quota_frame = labeled_frame(self, "Quota Settings")
         quota_outer.pack(fill="x", padx=12, pady=4)

@@ -4,6 +4,7 @@ import queue
 import os
 
 from core import Config, load_templates
+from gui.setup_tab import SetupTab
 from gui.settings_tab import SettingsTab
 from gui.roi_tab import ROITab
 from gui.calibration_tab import CalibrationTab, THRESH_PREVIEW_W, THRESH_PREVIEW_H
@@ -18,7 +19,7 @@ _WIN_H = THRESH_PREVIEW_H * 4 + 110  # 160*4 + 110 = 750
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-_TAB_NAMES = ("  Settings  ", "  ROI Setup  ", "  Calibration  ", "  Monitor  ")
+_TAB_NAMES = ("  Setup  ", "  Settings  ", "  ROI Setup  ", "  Calibration  ", "  Monitor  ")
 
 
 class App(ctk.CTk):
@@ -35,7 +36,7 @@ class App(ctk.CTk):
 
         self._build_ui()
         # Build the first (visible) tab immediately; all others build on first visit
-        self.settings_tab.ensure_built()
+        self.setup_tab.ensure_built()
         self.reload_templates()
         self._poll_job = None
         self._poll_log_queue()
@@ -49,12 +50,13 @@ class App(ctk.CTk):
 
         tab_frames = [self.tabview.add(name) for name in _TAB_NAMES]
 
-        self.settings_tab    = SettingsTab(tab_frames[0], self)
-        self.roi_tab         = ROITab(tab_frames[1], self)
-        self.calibration_tab = CalibrationTab(tab_frames[2], self)
-        self.monitor_tab     = MonitorTab(tab_frames[3], self)
+        self.setup_tab       = SetupTab(tab_frames[0], self)
+        self.settings_tab    = SettingsTab(tab_frames[1], self)
+        self.roi_tab         = ROITab(tab_frames[2], self)
+        self.calibration_tab = CalibrationTab(tab_frames[3], self)
+        self.monitor_tab     = MonitorTab(tab_frames[4], self)
 
-        for tab in (self.settings_tab, self.roi_tab,
+        for tab in (self.setup_tab, self.settings_tab, self.roi_tab,
                     self.calibration_tab, self.monitor_tab):
             tab.pack(fill="both", expand=True)
 
@@ -62,7 +64,7 @@ class App(ctk.CTk):
     def _on_tab_changed(self):
         name = self.tabview.get()
         mapping = dict(zip(_TAB_NAMES, (
-            self.settings_tab, self.roi_tab,
+            self.setup_tab, self.settings_tab, self.roi_tab,
             self.calibration_tab, self.monitor_tab,
         )))
         tab = mapping.get(name)
