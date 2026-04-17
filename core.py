@@ -309,7 +309,7 @@ def extract_char_crops(thresh):
 
     comps.sort(key=lambda c: c[0])
 
-    mid_lo, mid_hi = w * 2 // 5, w * 3 // 5
+    mid_lo, mid_hi = w * 1 // 5, w * 4 // 5
     slash_idx = None
     min_cw = float('inf')
     for i, (cx, cw, _) in enumerate(comps):
