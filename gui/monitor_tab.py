@@ -203,6 +203,8 @@ class MonitorTab(ctk.CTkFrame):
 
     def _night_shutdown(self):
         self._shutdown_after_id = None
+        import subprocess
+        subprocess.Popen(["shutdown", "/s", "/t", "30"])
         self.app._on_close()
 
     # ------------------------------------------------------------------
