@@ -109,7 +109,7 @@ class SettingsTab(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _on_scan_cameras(self):
         self._scan_cam_btn.configure(state="disabled")
-        self._cam_status.configure(text="Scanning cameras 0–5…", text_color="orange")
+        self._cam_status.configure(text="Scanning all cameras…", text_color="orange")
 
         def _worker():
             from core import scan_cameras

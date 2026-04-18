@@ -446,7 +446,11 @@ class CameraFrameReader:
 
     def _loop(self):
         while not self._stop:
-            ret, frame = self._cap.read()
+            try:
+                ret, frame = self._cap.read()
+            except Exception:
+                time.sleep(self._copy_interval)
+                continue
             if ret and frame is not None:
                 with self._lock:
                     self._ret   = True
@@ -490,15 +494,23 @@ def scan_cameras() -> list:
     found  = []
     name_i = 0
 
-    for i in range(limit + 1):
-        cap = cv2.VideoCapture(i)
-        opened = cap.isOpened()
-        cap.release()
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_stderr = os.dup(2)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+    try:
+        for i in range(limit + 1):
+            cap = cv2.VideoCapture(i)
+            opened = cap.isOpened()
+            cap.release()
 
-        if opened:
-            name = pnp_names[name_i] if name_i < len(pnp_names) else f"Camera {i}"
-            name_i += 1
-            found.append((i, name))
+            if opened:
+                name = pnp_names[name_i] if name_i < len(pnp_names) else f"Camera {i}"
+                name_i += 1
+                found.append((i, name))
+    finally:
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)
 
     return found
 

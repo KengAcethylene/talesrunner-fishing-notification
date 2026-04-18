@@ -340,6 +340,9 @@ class MonitorTab(ctk.CTkFrame):
             pct = min(100.0, current / limit * 100) if limit else 0
             self._progress.set(pct / 100)
             self._pct_label.configure(text=f"{pct:.0f}%")
+            if self._night_mode and limit and current >= limit and self._shutdown_after_id is None:
+                self._set_status("Night mode: closing in 5m…", "orange")
+                self._shutdown_after_id = self.after(300_000, self._night_shutdown)
         elif msg_type == "uptime":
             self.uptime_var.set(f"Uptime: {payload}")
         elif msg_type == "night_shutdown":
